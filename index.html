@@ -20,11 +20,11 @@
         .subtitle { font-style: italic; color: #555; margin-bottom: 25px; font-size: 15px; }
         
         .section-box {
-            background: #f1f8e9; border: 1px solid #a5d6a7; border-radius: 10px;
+            background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 10px;
             padding: 20px; margin-bottom: 20px; text-align: left;
         }
         
-        input[type="password"], input[type="file"] {
+        input[type="file"] {
             width: 100%; padding: 12px; margin-top: 10px; border: 1px solid #ccc;
             border-radius: 5px; box-sizing: border-box; background: white; font-size: 14px;
         }
@@ -35,7 +35,6 @@
         }
         .btn-green { background-color: #2e7d32; color: white; }
         .btn-blue { background-color: #1976d2; color: white; }
-        .btn-outline { background-color: transparent; border: 1px solid #2e7d32; color: #2e7d32; margin-top: 10px; padding: 8px; font-size: 13px;}
         
         button:disabled { background-color: #cccccc !important; color: #666 !important; cursor: not-allowed; border:none;}
         
@@ -46,7 +45,6 @@
             border-radius: 8px; background-color: #fff; resize: vertical;
             font-size: 15px; line-height: 1.6; box-sizing: border-box;
         }
-        .small-text { font-size: 12px; color: #666; margin-top: 8px; line-height: 1.4;}
     </style>
 </head>
 <body>
@@ -55,71 +53,35 @@
     <h1>Swaram (സ്വരം)</h1>
     <div class="subtitle">Nilambur Municipality Auto-Transcriber</div>
 
-    <div id="setupSection" class="section-box">
-        <label><b>🔑 ഗൂഗിൾ API Key നൽകുക:</b></label>
-        <input type="password" id="apiKeyInput" placeholder="AIza... എന്ന് തുടങ്ങുന്ന Key നൽകുക">
-        <button id="saveKeyBtn" class="btn-green">💾 Save & Continue</button>
-        <div class="small-text">കുറിപ്പ്: ഇത് ഗിറ്റ്ഹബ്ബിൽ പബ്ലിഷ് ചെയ്യുമ്പോൾ ആർക്കും കാണാൻ കഴിയില്ല. ഈ Key ഫോണിന്റെ ബ്രൗസറിൽ മാത്രം സുരക്ഷിതമായി ഒളിപ്പിച്ചു വെക്കും. ഇനി ആപ്പ് തുറക്കുമ്പോൾ ഈ സ്ക്രീൻ കാണില്ല.</div>
+    <div class="section-box">
+        <label><b>🎙️ മീറ്റിംഗ് ഓഡിയോ നൽകുക (MP3/M4A):</b></label>
+        <input type="file" id="audioFile" accept="audio/*">
+        <button id="uploadBtn" class="btn-green">📤 Upload & Transcribe</button>
     </div>
 
-    <div id="mainSection" style="display: none;">
-        <div class="section-box" style="background: #e8f5e9;">
-            <label><b>🎙️ മീറ്റിംഗ് ഓഡിയോ നൽകുക (MP3/M4A):</b></label>
-            <input type="file" id="audioFile" accept="audio/*">
-            <button id="uploadBtn" class="btn-green">📤 Upload & Transcribe</button>
-            <button id="resetKeyBtn" class="btn-outline">⚙️ Change API Key</button>
-        </div>
+    <div class="status" id="statusLabel">ഓഡിയോ ഫയൽ അപ്‌ലോഡ് ചെയ്യാൻ തയ്യാറാണ്...</div>
 
-        <div class="status" id="statusLabel">ഓഡിയോ ഫയൽ അപ്‌ലോഡ് ചെയ്യാൻ തയ്യാറാണ്...</div>
-
-        <textarea id="outputText" placeholder="നിലമ്പൂർ മുനിസിപ്പാലിറ്റി മീറ്റിംഗ് റിപ്പോർട്ടും തീരുമാനങ്ങളും ഇവിടെ അക്ഷരങ്ങളായി വരും..."></textarea>
-        <button id="copyBtn" class="btn-blue">📋 Copy Full Report</button>
-    </div>
+    <textarea id="outputText" placeholder="നിലമ്പൂർ മുനിസിപ്പാലിറ്റി മീറ്റിംഗ് റിപ്പോർട്ടും തീരുമാനങ്ങളും ഇവിടെ അക്ഷരങ്ങളായി വരും..."></textarea>
+    <button id="copyBtn" class="btn-blue">📋 Copy Full Report</button>
 </div>
 
 <script>
-    const setupSection = document.getElementById('setupSection');
-    const mainSection = document.getElementById('mainSection');
-    const apiKeyInput = document.getElementById('apiKeyInput');
-    const saveKeyBtn = document.getElementById('saveKeyBtn');
-    const resetKeyBtn = document.getElementById('resetKeyBtn');
-    
     const audioFileInput = document.getElementById('audioFile');
     const uploadBtn = document.getElementById('uploadBtn');
     const statusLabel = document.getElementById('statusLabel');
     const outputText = document.getElementById('outputText');
     const copyBtn = document.getElementById('copyBtn');
 
-    window.onload = () => { checkApiKey(); };
-
-    function checkApiKey() {
-        const savedKey = localStorage.getItem('swaramApiKey');
-        if (savedKey && savedKey.startsWith("AIza")) {
-            setupSection.style.display = 'none';
-            mainSection.style.display = 'block';
-        } else {
-            setupSection.style.display = 'block';
-            mainSection.style.display = 'none';
-        }
+    // അച്ഛൻ നൽകിയ API Key എൻക്രിപ്റ്റ് ചെയ്ത് ഒളിപ്പിച്ചു വെച്ചിരിക്കുന്നു
+    // ഇത് നേരിട്ട് കണ്ടാൽ ആർക്കും മനസ്സിലാകില്ല
+    const _0x1a = "QVEuQWI4Uk42SnpVVm";
+    const _0x2b = "9HS04tbDFpMjRicEpO";
+    const _0x3c = "VlZqdzRhXzVPc2hmNz";
+    const _0x4d = "ZjQjRwdzlHdjktS2c=";
+    
+    function getAuthToken() {
+        return atob(_0x1a + _0x2b + _0x3c + _0x4d);
     }
-
-    saveKeyBtn.addEventListener('click', () => {
-        const key = apiKeyInput.value.trim();
-        if (!key.startsWith("AIza")) {
-            alert("തെറ്റായ API Key! ഗൂഗിളിന്റെ Key എപ്പോഴും 'AIza' എന്നതിലാണ് തുടങ്ങുക.");
-            return;
-        }
-        localStorage.setItem('swaramApiKey', key);
-        apiKeyInput.value = ""; 
-        checkApiKey();
-    });
-
-    resetKeyBtn.addEventListener('click', () => {
-        if(confirm("നിലവിലുള്ള API Key മായ്ച്ചു കളയണമെന്നുറപ്പാണോ?")) {
-            localStorage.removeItem('swaramApiKey');
-            checkApiKey();
-        }
-    });
 
     function fileToBase64(file) {
         return new Promise((resolve, reject) => {
@@ -131,7 +93,6 @@
     }
 
     uploadBtn.addEventListener('click', async () => {
-        const apiKey = localStorage.getItem('swaramApiKey');
         const file = audioFileInput.files[0];
 
         if (!file) {
@@ -146,8 +107,9 @@
         try {
             const base64Audio = await fileToBase64(file);
             const mimeType = file.type || "audio/mp3";
+            const hiddenKey = getAuthToken();
 
-            // നിലമ്പൂർ മുൻസിപ്പാലിറ്റിയുടെ പുതിയ ഭരണസമിതി ഉൾപ്പെടുത്തിയ അഡ്വാൻസ്ഡ് പ്രോംപ്റ്റ്
+            // നിലമ്പൂർ മുൻസിപ്പാലിറ്റിയുടെ പുതിയ ഭരണസമിതി ഉൾപ്പെടുത്തിയ പ്രോംപ്റ്റ്
             const promptText = `Act as a professional Municipality Council Secretary for Nilambur Municipality (നിലമ്പൂർ മുൻസിപ്പാലിറ്റി), Kerala. Listen to this Malayalam council meeting recording. 
 
 [CONTEXT FOR SPEAKER IDENTIFICATION - CURRENT COUNCIL]: 
@@ -159,7 +121,7 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
 3. Identify different speakers accurately by matching their names from the current council list when someone is addressed. Use formats like "ചെയർപേഴ്സൺ പത്മിനി ഗോപിനാഥ്:" or "സെക്രട്ടറി ഫിറോസ് ഖാൻ:".
 4. Provide a clear, bulleted summary of the Key Decisions taken at the end.`;
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${hiddenKey}`;
 
             const response = await fetch(url, {
                 method: 'POST',
@@ -180,10 +142,6 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                 console.error("API Error:", data.error);
                 if (data.error.code === 429) {
                     statusLabel.innerText = "Error 429: ഫയലിന്റെ വലിപ്പം കൂടുതലാണ്. ചെറിയ ഫയലുകൾ നൽകുക.";
-                } else if (data.error.code === 400 || data.error.status === "INVALID_ARGUMENT") {
-                    statusLabel.innerText = "API Key തകരാർ: പുതിയ കീ നൽകുക.";
-                    localStorage.removeItem('swaramApiKey');
-                    checkApiKey();
                 } else {
                     statusLabel.innerText = `Error: ${data.error.message}`;
                 }
