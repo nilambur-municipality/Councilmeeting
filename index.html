@@ -65,15 +65,13 @@
     <div id="mainSection" style="display: none;">
         <div class="section-box" style="background: #e8f5e9;">
             <label><b>🎙️ മീറ്റിംഗ് ഓഡിയോ / വീഡിയോ നൽകുക:</b></label>
-            <!-- ഇവിടെ വീഡിയോ കൂടി സെലക്ട് ചെയ്യാൻ സാധിക്കുന്ന രീതിയിൽ മാറ്റിയിട്ടുണ്ട് -->
             <input type="file" id="audioFile" accept="audio/*, video/*">
-            <button id="uploadBtn" class="btn-green">📤 Upload & Transcribe</button>
+            <button id="uploadBtn" class="btn-green">📤 Convert & Transcribe</button>
             <button id="resetKeyBtn" class="btn-outline">⚙️ Change API Key</button>
         </div>
 
-        <div class="status" id="statusLabel">ഫയൽ അപ്‌ലോഡ് ചെയ്യാൻ തയ്യാറാണ്...</div>
+        <div class="status" id="statusLabel">ഫയൽ പ്രോസസ്സ് ചെയ്യാൻ തയ്യാറാണ്...</div>
 
-        <!-- Progress Bar -->
         <div id="progressContainer" style="display: none; width: 100%; background-color: #e0e0e0; border-radius: 8px; margin-bottom: 15px; overflow: hidden;">
             <div id="progressFill" style="width: 0%; height: 20px; background-color: #2e7d32; text-align: center; line-height: 20px; color: white; font-size: 13px; font-weight: bold; transition: width 0.2s;">0%</div>
         </div>
@@ -96,7 +94,15 @@
     const outputText = document.getElementById('outputText');
     const copyBtn = document.getElementById('copyBtn');
 
-    window.onload = () => { checkApiKey(); };
+    // കൗൺസിലർമാരുടെ പേരുവിവരങ്ങൾ സേവ് ചെയ്യാനുള്ള കീകൾ
+    const CACHE_KEY = 'swaramCouncilorData';
+    const CACHE_TIME_KEY = 'swaramCouncilorDataTime';
+    const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 ദിവസങ്ങൾ
+
+    window.onload = () => { 
+        checkApiKey(); 
+        updateCouncilorDataInBackground(); 
+    };
 
     function checkApiKey() {
         const savedKey = localStorage.getItem('swaramApiKey');
@@ -127,18 +133,45 @@
         }
     });
 
-    function fileToBase64(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => resolve(reader.result.split(',')[1]);
-            reader.onerror = error => reject(error);
-        });
+    // മാസത്തിൽ ഒരിക്കൽ മാത്രം ബാക്ക്ഗ്രൗണ്ടിൽ ഡാറ്റ അപ്ഡേറ്റ് ചെയ്യാനുള്ള ഫംഗ്ഷൻ
+    async function updateCouncilorDataInBackground() {
+        const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
+        const now = Date.now();
+
+        // ഡാറ്റ ഇല്ലാതിരിക്കുകയോ അല്ലെങ്കിൽ 30 ദിവസം കഴിഞ്ഞിട്ടുണ്ടെങ്കിലോ മാത്രം പ്രവർത്തിക്കും
+        if (!cachedTime || (now - parseInt(cachedTime)) > CACHE_DURATION_MS) {
+            if (navigator.onLine) {
+                console.log("മാസം ഒരു തവണയുള്ള കൗൺസിലർ ഡാറ്റ അപ്ഡേറ്റ് നടക്കുന്നു...");
+                try {
+                    const targetUrl = 'https://nilamburmunicipality.lsgkerala.gov.in/en/Elected%20representatives';
+                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+                    
+                    const response = await fetch(proxyUrl);
+                    const data = await response.json();
+                    
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(data.contents, 'text/html');
+                    
+                    let extractedText = "";
+                    const tables = doc.querySelectorAll('table');
+                    tables.forEach(table => {
+                        extractedText += table.innerText + " \n";
+                    });
+
+                    if (extractedText.trim().length > 10) {
+                        localStorage.setItem(CACHE_KEY, extractedText);
+                        localStorage.setItem(CACHE_TIME_KEY, now.toString());
+                        console.log("പുതിയ കൗൺസിലർ ഡാറ്റ വിജയകരമായി മെമ്മറിയിൽ സൂക്ഷിച്ചു.");
+                    }
+                } catch (error) {
+                    console.error("ബാക്ക്ഗ്രൗണ്ട് അപ്ഡേറ്റ് പരാജയപ്പെട്ടു (ഇന്റർനെറ്റ് പ്രശ്നമാകാം):", error);
+                }
+            }
+        }
     }
 
     const MAX_CHUNK_BYTES = 18 * 1024 * 1024; 
 
-    // ഈ ഫംഗ്ഷൻ വഴി വീഡിയോ ഫയലുകളിൽ നിന്നും ഓഡിയോ വേർതിരിച്ചെടുക്കാം
     async function decodeAudioFile(file) {
         const arrayBuffer = await file.arrayBuffer();
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -186,7 +219,6 @@
         const totalSamples = audioBuffer.length;
 
         const { isSilentFrame, frameSize, numFrames } = findSilenceFrames(audioBuffer);
-
         const minSilentFrames = Math.ceil(MIN_SILENCE_RUN_MS / SILENCE_FRAME_MS);
         const maxKeepFrames = Math.ceil((MAX_SILENCE_DURATION_SEC * 1000) / SILENCE_FRAME_MS);
 
@@ -202,7 +234,6 @@
                 let j = i;
                 while (j < numFrames && isSilentFrame[j]) j++;
                 const runLength = j - i;
-
                 if (runLength >= minSilentFrames) {
                     const framesToKeep = Math.min(runLength, maxKeepFrames);
                     keepRanges.push([i * frameSize, Math.min((i + framesToKeep) * frameSize, totalSamples)]);
@@ -216,9 +247,7 @@
         let newLength = 0;
         for (const [s, e] of keepRanges) newLength += (e - s);
 
-        if (newLength >= totalSamples || newLength === 0) {
-            return audioBuffer;
-        }
+        if (newLength >= totalSamples || newLength === 0) return audioBuffer;
 
         const OfflineCtxCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
         const trimmedBuffer = new OfflineCtxCtor(numChannels, newLength, sampleRate).createBuffer(numChannels, newLength, sampleRate);
@@ -232,7 +261,6 @@
                 writeOffset += (e - s);
             }
         }
-
         return trimmedBuffer;
     }
 
@@ -252,17 +280,11 @@
                 }
             }
         }
-
         return targetSample;
     }
 
     function pickRecorderMimeType() {
-        const candidates = [
-            'audio/webm;codecs=opus',
-            'audio/webm',
-            'audio/ogg;codecs=opus',
-            'audio/mp4'
-        ];
+        const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
         for (const type of candidates) {
             if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
         }
@@ -316,9 +338,7 @@
 
                 recorder.start();
                 playSource.start();
-                playSource.onended = () => {
-                    setTimeout(() => recorder.stop(), 100);
-                };
+                playSource.onended = () => { setTimeout(() => recorder.stop(), 100); };
             }).catch(reject);
         });
     }
@@ -366,7 +386,6 @@
                 offset += 2;
             }
         }
-
         return new Blob([buffer], { type: 'audio/wav' });
     }
 
@@ -417,7 +436,6 @@
                 } else {
                     chunks.push({ blob, startTime: start / sampleRate, endTime: end / sampleRate, mimeType });
                 }
-
                 start = end;
             }
         } else {
@@ -434,7 +452,6 @@
                 start = end;
             }
         }
-
         return chunks;
     }
 
@@ -445,34 +462,6 @@
             reader.onload = () => resolve(reader.result.split(',')[1]);
             reader.onerror = error => reject(error);
         });
-    }
-
-    async function fetchCouncilorsData() {
-        try {
-            const targetUrl = 'https://nilamburmunicipality.lsgkerala.gov.in/en/Elected%20representatives';
-            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
-            
-            const response = await fetch(proxyUrl);
-            const data = await response.json();
-            
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(data.contents, 'text/html');
-            
-            let extractedText = "";
-            const tables = doc.querySelectorAll('table');
-            tables.forEach(table => {
-                extractedText += table.innerText + " \n";
-            });
-
-            if (extractedText.trim().length > 10) {
-                return extractedText;
-            } else {
-                return null;
-            }
-        } catch (error) {
-            console.error("Scraping Error:", error);
-            return null;
-        }
     }
 
     uploadBtn.addEventListener('click', async () => {
@@ -490,10 +479,8 @@
         uploadBtn.disabled = true;
         outputText.value = "";
 
-        statusLabel.innerText = "വെബ്സൈറ്റിൽ നിന്നും കൗൺസിലർമാരുടെ പുതിയ വിവരങ്ങൾ ശേഖരിക്കുന്നു...";
-        statusLabel.style.color = "#b35900";
-
-        let liveCouncilorData = await fetchCouncilorsData();
+        // അപ്‌ലോഡ് സമയത്ത് വെബ്സൈറ്റിൽ പോകാതെ നേരിട്ട് മെമ്മറിയിൽ നിന്നും ഡാറ്റ എടുക്കുന്നു
+        let liveCouncilorData = localStorage.getItem(CACHE_KEY);
 
         const PRIMARY_MODEL = "gemini-2.5-flash";
         const FALLBACK_MODEL = "gemini-2.5-pro"; 
@@ -607,113 +594,4 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
         function showApiError(err) {
             console.error("API Error:", err);
             if (err.code === 429) {
-                statusLabel.innerText = "Error 429: ഇപ്പോൾ ഉപയോഗം കൂടുതലാണ് (Rate Limit). കുറച്ച് സമയത്തിന് ശേഷം വീണ്ടും ശ്രമിക്കുക.";
-            } else if (err.code === 400 || err.status === "INVALID_ARGUMENT" || err.code === 401) {
-                statusLabel.innerText = "API Key തകരാർ: താങ്കൾ നൽകിയ കീ പ്രവർത്തിക്കുന്നില്ല. പുതിയ കീ നൽകുക.";
-                localStorage.removeItem('swaramApiKey');
-                checkApiKey();
-            } else {
-                statusLabel.innerText = `Error: ${err.message}`;
-            }
-            statusLabel.style.color = "#d32f2f";
-        }
-
-        try {
-            // ഫയൽ വീഡിയോ ആണോ എന്ന് പരിശോധിക്കുന്നു
-            const isVideo = file.type.startsWith('video/');
-
-            // ചെറിയ ഓഡിയോ ഫയൽ ആണെങ്കിൽ നേരെ പ്രോസസ്സ് ചെയ്യും
-            if (!isVideo && file.size <= MAX_CHUNK_BYTES) {
-                statusLabel.innerText = "ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... വലിയ മീറ്റിംഗുകൾക്ക് അല്പം സമയമെടുക്കും.";
-                statusLabel.style.color = "#1976d2";
-
-                const base64Audio = await fileToBase64(file);
-                const mimeType = file.type || "audio/mp3";
-                const promptText = buildPromptText(null);
-
-                const result = await transcribeChunk(base64Audio, mimeType, promptText);
-
-                if (result.error) {
-                    showApiError(result.error);
-                } else {
-                    outputText.value = result.text;
-                    statusLabel.innerText = "റിപ്പോർട്ട് തയ്യാറാക്കൽ പൂർത്തിയായി! ✨";
-                    statusLabel.style.color = "#2e7d32";
-                }
-            } else {
-                // വീഡിയോ ഫയലോ അല്ലെങ്കിൽ വലിയ ഓഡിയോ ഫയലോ ആണെങ്കിൽ
-                if (isVideo) {
-                    statusLabel.innerText = "വീഡിയോ ഫയലിൽ നിന്നും ഓഡിയോ വേർതിരിക്കുന്നു... കാത്തിരിക്കുക.";
-                } else {
-                    statusLabel.innerText = "ഓഡിയോ ഫയൽ വായിക്കുന്നു...";
-                }
-                statusLabel.style.color = "#b35900";
-
-                const { audioBuffer, audioCtx } = await decodeAudioFile(file);
-
-                statusLabel.innerText = "നിശബ്ദമായ ഭാഗങ്ങൾ (silence) കുറുക്കി ഫയൽ ചെറുതാക്കുന്നു...";
-                const trimmedBuffer = trimSilence(audioBuffer, audioCtx);
-
-                if (isVideo) {
-                    statusLabel.innerText = "വേർതിരിച്ചെടുത്ത ഓഡിയോ കംപ്രസ്സ് ചെയ്യുന്നു...";
-                } else {
-                    statusLabel.innerText = "വലിയ ഫയൽ ആയതിനാൽ ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു...";
-                }
-
-                const chunks = await splitAudioBufferIntoChunks(trimmedBuffer, (done, total) => {
-                    statusLabel.innerText = `ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... (${done} / ${total})`;
-                });
-
-                audioCtx.close();
-
-                const collectedTexts = [];
-
-                for (let i = 0; i < chunks.length; i++) {
-                    const chunk = chunks[i];
-                    statusLabel.innerText = `ഭാഗം ${i + 1} / ${chunks.length} പ്രോസസ്സ് ചെയ്യുന്നു...`;
-                    statusLabel.style.color = "#1976d2";
-
-                    const base64Audio = await blobToBase64(chunk.blob);
-                    const mimeType = chunk.mimeType || "audio/webm";
-
-                    const timeContext = `[NOTE]: This is part ${i + 1} of ${chunks.length} of a longer meeting recording, in sequential order. Transcribe only what is heard in this segment. Do not repeat instructions or add a separate summary section for this part — a combined summary will be added at the end separately.`;
-                    const promptText = buildPromptText(timeContext);
-
-                    const result = await transcribeChunk(base64Audio, mimeType, promptText);
-
-                    if (result.error) {
-                        showApiError(result.error);
-                        outputText.value = collectedTexts.join("\n\n");
-                        uploadBtn.disabled = false;
-                        return;
-                    }
-
-                    collectedTexts.push(`--- ഭാഗം ${i + 1} ---\n${result.text}`);
-                    outputText.value = collectedTexts.join("\n\n");
-                }
-
-                statusLabel.innerText = `എല്ലാ ഭാഗങ്ങളും പൂർത്തിയായി! റിപ്പോർട്ട് തയ്യാറാണ് ✨`;
-                statusLabel.style.color = "#2e7d32";
-            }
-
-        } catch (err) {
-            console.error(err);
-            statusLabel.innerText = "നെറ്റ്‌വർക്ക് തകരാർ! ഇന്റർനെറ്റ് കണക്ഷൻ അല്ലെങ്കിൽ ഫയൽ പരിശോധിക്കുക.";
-            statusLabel.style.color = "#d32f2f";
-        }
-
-        uploadBtn.disabled = false;
-    });
-
-    copyBtn.addEventListener('click', () => {
-        if (!outputText.value) {
-            alert("കോപ്പി ചെയ്യാൻ വിവരങ്ങളില്ല!"); return;
-        }
-        navigator.clipboard.writeText(outputText.value).then(() => {
-            alert("റിപ്പോർട്ട് പൂർണ്ണമായും കോപ്പിയായി! ഇത് നേരിട്ട് ഉപയോഗിക്കാം.");
-        });
-    });
-</script>
-
-</body>
-</html>
+                statusLabel.
