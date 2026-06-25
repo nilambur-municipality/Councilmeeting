@@ -64,14 +64,16 @@
 
     <div id="mainSection" style="display: none;">
         <div class="section-box" style="background: #e8f5e9;">
-            <label><b>🎙️ മീറ്റിംഗ് ഓഡിയോ നൽകുക (MP3/M4A):</b></label>
-            <input type="file" id="audioFile" accept="audio/*">
+            <label><b>🎙️ മീറ്റിംഗ് ഓഡിയോ / വീഡിയോ നൽകുക:</b></label>
+            <!-- ഇവിടെ വീഡിയോ കൂടി സെലക്ട് ചെയ്യാൻ സാധിക്കുന്ന രീതിയിൽ മാറ്റിയിട്ടുണ്ട് -->
+            <input type="file" id="audioFile" accept="audio/*, video/*">
             <button id="uploadBtn" class="btn-green">📤 Upload & Transcribe</button>
             <button id="resetKeyBtn" class="btn-outline">⚙️ Change API Key</button>
         </div>
 
-        <div class="status" id="statusLabel">ഓഡിയോ ഫയൽ അപ്‌ലോഡ് ചെയ്യാൻ തയ്യാറാണ്...</div>
+        <div class="status" id="statusLabel">ഫയൽ അപ്‌ലോഡ് ചെയ്യാൻ തയ്യാറാണ്...</div>
 
+        <!-- Progress Bar -->
         <div id="progressContainer" style="display: none; width: 100%; background-color: #e0e0e0; border-radius: 8px; margin-bottom: 15px; overflow: hidden;">
             <div id="progressFill" style="width: 0%; height: 20px; background-color: #2e7d32; text-align: center; line-height: 20px; color: white; font-size: 13px; font-weight: bold; transition: width 0.2s;">0%</div>
         </div>
@@ -136,6 +138,7 @@
 
     const MAX_CHUNK_BYTES = 18 * 1024 * 1024; 
 
+    // ഈ ഫംഗ്ഷൻ വഴി വീഡിയോ ഫയലുകളിൽ നിന്നും ഓഡിയോ വേർതിരിച്ചെടുക്കാം
     async function decodeAudioFile(file) {
         const arrayBuffer = await file.arrayBuffer();
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -477,10 +480,9 @@
         const file = audioFileInput.files[0];
 
         if (!file) {
-            alert("ദയവായി റെക്കോർഡ് ചെയ്ത മീറ്റിംഗ് ഓഡിയോ തിരഞ്ഞെടുക്കുക!"); return;
+            alert("ദയവായി പ്രോസസ്സ് ചെയ്യേണ്ട ഓഡിയോ/വീഡിയോ ഫയൽ തിരഞ്ഞെടുക്കുക!"); return;
         }
 
-        // അപ്‌ലോഡ് തുടങ്ങുമ്പോൾ Progress Bar റീസെറ്റ് ചെയ്യുന്നു
         document.getElementById('progressContainer').style.display = 'none';
         document.getElementById('progressFill').style.width = '0%';
         document.getElementById('progressFill').innerText = '0%';
@@ -519,7 +521,6 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
             return promptText;
         }
 
-        // പുതിയ XMLHttpRequest ഉപയോഗിച്ചുള്ള callGemini ഫംഗ്ഷൻ
         async function callGemini(modelName, promptText, base64Audio, mimeType) {
             return new Promise((resolve, reject) => {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
@@ -618,7 +619,11 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
         }
 
         try {
-            if (file.size <= MAX_CHUNK_BYTES) {
+            // ഫയൽ വീഡിയോ ആണോ എന്ന് പരിശോധിക്കുന്നു
+            const isVideo = file.type.startsWith('video/');
+
+            // ചെറിയ ഓഡിയോ ഫയൽ ആണെങ്കിൽ നേരെ പ്രോസസ്സ് ചെയ്യും
+            if (!isVideo && file.size <= MAX_CHUNK_BYTES) {
                 statusLabel.innerText = "ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... വലിയ മീറ്റിംഗുകൾക്ക് അല്പം സമയമെടുക്കും.";
                 statusLabel.style.color = "#1976d2";
 
@@ -636,7 +641,12 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                     statusLabel.style.color = "#2e7d32";
                 }
             } else {
-                statusLabel.innerText = "ഓഡിയോ ഫയൽ വായിക്കുന്നു...";
+                // വീഡിയോ ഫയലോ അല്ലെങ്കിൽ വലിയ ഓഡിയോ ഫയലോ ആണെങ്കിൽ
+                if (isVideo) {
+                    statusLabel.innerText = "വീഡിയോ ഫയലിൽ നിന്നും ഓഡിയോ വേർതിരിക്കുന്നു... കാത്തിരിക്കുക.";
+                } else {
+                    statusLabel.innerText = "ഓഡിയോ ഫയൽ വായിക്കുന്നു...";
+                }
                 statusLabel.style.color = "#b35900";
 
                 const { audioBuffer, audioCtx } = await decodeAudioFile(file);
@@ -644,10 +654,14 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                 statusLabel.innerText = "നിശബ്ദമായ ഭാഗങ്ങൾ (silence) കുറുക്കി ഫയൽ ചെറുതാക്കുന്നു...";
                 const trimmedBuffer = trimSilence(audioBuffer, audioCtx);
 
-                statusLabel.innerText = "വലിയ ഫയൽ ആയതിനാൽ ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു...";
+                if (isVideo) {
+                    statusLabel.innerText = "വേർതിരിച്ചെടുത്ത ഓഡിയോ കംപ്രസ്സ് ചെയ്യുന്നു...";
+                } else {
+                    statusLabel.innerText = "വലിയ ഫയൽ ആയതിനാൽ ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു...";
+                }
 
                 const chunks = await splitAudioBufferIntoChunks(trimmedBuffer, (done, total) => {
-                    statusLabel.innerText = `ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു... (${done} / ${total})`;
+                    statusLabel.innerText = `ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... (${done} / ${total})`;
                 });
 
                 audioCtx.close();
@@ -678,13 +692,13 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                     outputText.value = collectedTexts.join("\n\n");
                 }
 
-                statusLabel.innerText = `എല്ലാ ${chunks.length} ഭാഗങ്ങളും പൂർത്തിയായി! റിപ്പോർട്ട് തയ്യാറാണ് ✨`;
+                statusLabel.innerText = `എല്ലാ ഭാഗങ്ങളും പൂർത്തിയായി! റിപ്പോർട്ട് തയ്യാറാണ് ✨`;
                 statusLabel.style.color = "#2e7d32";
             }
 
         } catch (err) {
             console.error(err);
-            statusLabel.innerText = "നെറ്റ്‌വർക്ക് തകരാർ! ഇന്റർനെറ്റ് കണക്ഷൻ പരിശോധിക്കുക.";
+            statusLabel.innerText = "നെറ്റ്‌വർക്ക് തകരാർ! ഇന്റർനെറ്റ് കണക്ഷൻ അല്ലെങ്കിൽ ഫയൽ പരിശോധിക്കുക.";
             statusLabel.style.color = "#d32f2f";
         }
 
