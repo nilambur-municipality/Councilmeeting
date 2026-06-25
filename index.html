@@ -47,26 +47,6 @@
             font-size: 15px; line-height: 1.6; box-sizing: border-box;
         }
         .small-text { font-size: 12px; color: #666; margin-top: 8px; line-height: 1.4;}
-
-        /* History panel */
-        .history-panel { margin-top: 25px; text-align: left; }
-        .history-panel h3 { color: #2e7d32; font-size: 15px; margin-bottom: 10px; }
-        .history-empty { font-size: 13px; color: #888; text-align: center; padding: 12px; }
-        .history-item {
-            background: #f9fbe7; border: 1px solid #c5e1a5; border-radius: 8px;
-            padding: 10px 14px; margin-bottom: 8px; cursor: pointer;
-            display: flex; justify-content: space-between; align-items: center;
-            transition: background 0.2s;
-        }
-        .history-item:hover { background: #f1f8e9; }
-        .history-item-info { flex: 1; }
-        .history-item-name { font-weight: bold; font-size: 13px; color: #2e7d32; }
-        .history-item-date { font-size: 11px; color: #888; margin-top: 2px; }
-        .history-item-del {
-            background: none; border: none; color: #c62828; cursor: pointer;
-            font-size: 16px; padding: 4px 8px; margin: 0; width: auto; margin-top: 0;
-        }
-        .history-item-del:hover { color: #b71c1c; }
     </style>
 </head>
 <body>
@@ -98,11 +78,6 @@
 
         <textarea id="outputText" placeholder="നിലമ്പൂർ മുനിസിപ്പാലിറ്റി മീറ്റിംഗ് റിപ്പോർട്ടും തീരുമാനങ്ങളും ഇവിടെ അക്ഷരങ്ങളായി വരും..."></textarea>
         <button id="copyBtn" class="btn-blue">📋 Copy Full Report</button>
-
-        <div class="history-panel" id="historyPanel" style="display:none;">
-            <h3>🕘 മുൻ Transcripts</h3>
-            <div id="historyList"><div class="history-empty">ഇതുവരെ ഒന്നും സേവ് ചെയ്തിട്ടില്ല.</div></div>
-        </div>
     </div>
 </div>
 
@@ -118,89 +93,6 @@
     const statusLabel = document.getElementById('statusLabel');
     const outputText = document.getElementById('outputText');
     const copyBtn = document.getElementById('copyBtn');
-    const historyList = document.getElementById('historyList');
-    const historyPanel = document.getElementById('historyPanel');
-
-    // ─── IndexedDB transcript history ───────────────────────────────────────
-    const DB_NAME = 'swaramDB', DB_VERSION = 1, STORE = 'transcripts';
-
-    function openDB() {
-        return new Promise((resolve, reject) => {
-            const req = indexedDB.open(DB_NAME, DB_VERSION);
-            req.onupgradeneeded = e => e.target.result.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
-            req.onsuccess = e => resolve(e.target.result);
-            req.onerror = e => reject(e.target.error);
-        });
-    }
-
-    async function dbSaveTranscript(filename, text) {
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE, 'readwrite');
-            tx.objectStore(STORE).add({ filename, text, savedAt: Date.now() });
-            tx.oncomplete = resolve;
-            tx.onerror = e => reject(e.target.error);
-        });
-    }
-
-    async function dbListTranscripts() {
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
-            req.onsuccess = e => resolve(e.target.result.reverse()); // newest first
-            req.onerror = e => reject(e.target.error);
-        });
-    }
-
-    async function dbDeleteTranscript(id) {
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE, 'readwrite');
-            tx.objectStore(STORE).delete(id);
-            tx.oncomplete = resolve;
-            tx.onerror = e => reject(e.target.error);
-        });
-    }
-
-    async function refreshHistoryList() {
-        try {
-            const items = await dbListTranscripts();
-            historyPanel.style.display = items.length > 0 ? 'block' : 'none';
-            if (items.length === 0) {
-                historyList.innerHTML = '<div class="history-empty">ഇതുവരെ ഒന്നും സേവ് ചെയ്തിട്ടില്ല.</div>';
-                return;
-            }
-            historyList.innerHTML = '';
-            for (const item of items) {
-                const date = new Date(item.savedAt).toLocaleString('ml-IN');
-                const div = document.createElement('div');
-                div.className = 'history-item';
-                div.innerHTML = `
-                    <div class="history-item-info">
-                        <div class="history-item-name">📄 ${item.filename}</div>
-                        <div class="history-item-date">${date}</div>
-                    </div>
-                    <button class="history-item-del" title="Delete">🗑</button>
-                `;
-                div.querySelector('.history-item-info').addEventListener('click', () => {
-                    outputText.value = item.text;
-                    statusLabel.innerText = `"${item.filename}" ചരിത്രത്തിൽ നിന്നും ലോഡ് ചെയ്തു.`;
-                    statusLabel.style.color = "#2e7d32";
-                });
-                div.querySelector('.history-item-del').addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    if (confirm(`"${item.filename}" delete ചെയ്യണോ?`)) {
-                        await dbDeleteTranscript(item.id);
-                        refreshHistoryList();
-                    }
-                });
-                historyList.appendChild(div);
-            }
-        } catch (err) {
-            console.error("History load failed:", err);
-        }
-    }
-    // ────────────────────────────────────────────────────────────────────────
 
     // കൗൺസിലർമാരുടെ പേരുവിവരങ്ങൾ സേവ് ചെയ്യാനുള്ള കീകൾ
     const CACHE_KEY = 'swaramCouncilorData';
@@ -209,8 +101,7 @@
 
     window.onload = () => { 
         checkApiKey(); 
-        updateCouncilorDataInBackground();
-        refreshHistoryList();
+        updateCouncilorDataInBackground(); 
     };
 
     function checkApiKey() {
@@ -282,172 +173,17 @@
     const MAX_CHUNK_BYTES = 18 * 1024 * 1024; 
 
     async function decodeAudioFile(file) {
+        const arrayBuffer = await file.arrayBuffer();
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioCtx();
-
-        // First try: direct decodeAudioData (fast, works for pure audio files)
-        try {
-            const arrayBuffer = await file.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-            return { audioBuffer, audioCtx };
-        } catch (e) {
-            console.warn("decodeAudioData failed (likely a video container). Falling back to MediaElement decode...", e);
-        }
-
-        // Fallback: HTMLMediaElement + MediaElementAudioSourceNode
-        // This handles MP4/MOV/MKV containers that decodeAudioData can't handle.
-        // NOTE: This captures in real-time, so it takes as long as the file duration.
-        return new Promise((resolve, reject) => {
-            const url = URL.createObjectURL(file);
-            const mediaEl = file.type.startsWith('video/') ? document.createElement('video') : document.createElement('audio');
-            mediaEl.src = url;
-            mediaEl.preload = 'auto';
-            mediaEl.muted = true; // Don't play audibly
-
-            mediaEl.addEventListener('error', () => {
-                URL.revokeObjectURL(url);
-                reject(new Error("ഈ ഫയൽ ഫോർമാറ്റ് ഈ browser-ൽ പ്രവർത്തിക്കില്ല."));
-            });
-
-            mediaEl.addEventListener('canplaythrough', async () => {
-                try {
-                    const duration = mediaEl.duration;
-                    const sampleRate = audioCtx.sampleRate;
-                    const numChannels = 1; // Downmix to mono for efficiency
-                    const totalSamples = Math.ceil(duration * sampleRate);
-
-                    const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-                    const offlineCtx = new OfflineCtx(numChannels, totalSamples, sampleRate);
-
-                    const source = offlineCtx.createMediaElementSource
-                        ? null // OfflineAudioContext doesn't support MediaElementSource
-                        : null;
-
-                    // OfflineAudioContext can't use MediaElementSource.
-                    // Use a live AudioContext to capture the stream instead.
-                    const liveCtx = new AudioCtx();
-                    const dest = liveCtx.createMediaStreamDestination();
-                    const elemSource = liveCtx.createMediaElementSource(mediaEl);
-                    elemSource.connect(dest);
-
-                    // Record the stream into an AudioBuffer via MediaRecorder + decodeAudioData
-                    const recorder = new MediaRecorder(dest.stream);
-                    const chunks = [];
-                    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-
-                    recorder.onstop = async () => {
-                        liveCtx.close();
-                        URL.revokeObjectURL(url);
-                        try {
-                            const blob = new Blob(chunks, { type: recorder.mimeType });
-                            const ab = await blob.arrayBuffer();
-                            const audioBuffer = await audioCtx.decodeAudioData(ab);
-                            resolve({ audioBuffer, audioCtx });
-                        } catch (err) {
-                            reject(err);
-                        }
-                    };
-
-                    recorder.onerror = (e) => { liveCtx.close(); reject(e.error); };
-
-                    recorder.start();
-                    mediaEl.currentTime = 0;
-                    mediaEl.play();
-                    mediaEl.onended = () => { setTimeout(() => recorder.stop(), 300); };
-                } catch (err) {
-                    URL.revokeObjectURL(url);
-                    reject(err);
-                }
-            }, { once: true });
-
-            mediaEl.load();
-        });
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        return { audioBuffer, audioCtx };
     }
 
     const SILENCE_RMS_THRESHOLD = 0.015;      
     const SILENCE_FRAME_MS = 50;              
     const MAX_SILENCE_DURATION_SEC = 0.6;     
     const MIN_SILENCE_RUN_MS = 300;           
-
-    // Yield-based async version — prevents UI freeze on large files
-    async function findSilenceFramesYielding(audioBuffer) {
-        const sampleRate = audioBuffer.sampleRate;
-        const numChannels = audioBuffer.numberOfChannels;
-        const totalSamples = audioBuffer.length;
-        const frameSize = Math.max(1, Math.floor(sampleRate * SILENCE_FRAME_MS / 1000));
-
-        const monoData = new Float32Array(totalSamples);
-        for (let ch = 0; ch < numChannels; ch++) {
-            const chData = audioBuffer.getChannelData(ch);
-            for (let i = 0; i < totalSamples; i++) monoData[i] += chData[i] / numChannels;
-        }
-
-        const numFrames = Math.ceil(totalSamples / frameSize);
-        const isSilentFrame = new Uint8Array(numFrames);
-        const YIELD_EVERY = 2000; // yield every 2000 frames (~100ms of audio)
-
-        for (let f = 0; f < numFrames; f++) {
-            const start = f * frameSize;
-            const end = Math.min(start + frameSize, totalSamples);
-            let sumSquares = 0;
-            for (let i = start; i < end; i++) sumSquares += monoData[i] * monoData[i];
-            isSilentFrame[f] = Math.sqrt(sumSquares / (end - start)) < SILENCE_RMS_THRESHOLD ? 1 : 0;
-
-            if (f % YIELD_EVERY === 0 && f > 0) {
-                await new Promise(r => setTimeout(r, 0)); // yield to browser
-            }
-        }
-
-        return { isSilentFrame, frameSize, numFrames };
-    }
-
-    async function trimSilenceYielding(audioBuffer, audioCtx) {
-        const sampleRate = audioBuffer.sampleRate;
-        const numChannels = audioBuffer.numberOfChannels;
-        const totalSamples = audioBuffer.length;
-
-        const { isSilentFrame, frameSize, numFrames } = await findSilenceFramesYielding(audioBuffer);
-        const minSilentFrames = Math.ceil(MIN_SILENCE_RUN_MS / SILENCE_FRAME_MS);
-        const maxKeepFrames = Math.ceil((MAX_SILENCE_DURATION_SEC * 1000) / SILENCE_FRAME_MS);
-
-        const keepRanges = [];
-        let i = 0;
-        while (i < numFrames) {
-            if (!isSilentFrame[i]) {
-                let j = i;
-                while (j < numFrames && !isSilentFrame[j]) j++;
-                keepRanges.push([i * frameSize, Math.min(j * frameSize, totalSamples)]);
-                i = j;
-            } else {
-                let j = i;
-                while (j < numFrames && isSilentFrame[j]) j++;
-                const runLength = j - i;
-                if (runLength >= minSilentFrames) {
-                    const framesToKeep = Math.min(runLength, maxKeepFrames);
-                    keepRanges.push([i * frameSize, Math.min((i + framesToKeep) * frameSize, totalSamples)]);
-                } else {
-                    keepRanges.push([i * frameSize, Math.min(j * frameSize, totalSamples)]);
-                }
-                i = j;
-            }
-        }
-
-        let newLength = 0;
-        for (const [s, e] of keepRanges) newLength += (e - s);
-        if (newLength >= totalSamples || newLength === 0) return audioBuffer;
-
-        const trimmedBuffer = audioCtx.createBuffer(numChannels, newLength, sampleRate);
-        for (let ch = 0; ch < numChannels; ch++) {
-            const srcData = audioBuffer.getChannelData(ch);
-            const dstData = trimmedBuffer.getChannelData(ch);
-            let writeOffset = 0;
-            for (const [s, e] of keepRanges) {
-                dstData.set(srcData.subarray(s, e), writeOffset);
-                writeOffset += (e - s);
-            }
-        }
-        return trimmedBuffer;
-    }
 
     function findSilenceFrames(audioBuffer) {
         const sampleRate = audioBuffer.sampleRate;
@@ -840,35 +576,19 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
         }
 
         async function transcribeChunk(base64Audio, mimeType, promptText) {
-            const MAX_RETRIES = 3;
-            const RETRY_BASE_DELAY_MS = 5000;
+            let data = await callGemini(PRIMARY_MODEL, promptText, base64Audio, mimeType);
 
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                let data = await callGemini(PRIMARY_MODEL, promptText, base64Audio, mimeType);
-
-                if (isModelMissingError(data)) {
-                    data = await callGemini(FALLBACK_MODEL, promptText, base64Audio, mimeType);
-                }
-
-                if (!data.error) {
-                    if (data.candidates && data.candidates[0].content.parts[0].text) {
-                        return { text: data.candidates[0].content.parts[0].text };
-                    }
-                    return { error: { message: "മറുപടി ലഭിക്കുന്നതിൽ തകരാർ സംഭവിച്ചു." } };
-                }
-
-                const isRetryable = data.error.code === 429 || data.error.code === 503
-                    || (data.error.message && data.error.message.toLowerCase().includes("network"));
-
-                if (!isRetryable || attempt === MAX_RETRIES) {
-                    return { error: data.error };
-                }
-
-                const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-                statusLabel.innerText = `⏳ Error ${data.error.code || ''} — ${attempt}/${MAX_RETRIES} retry. ${Math.round(delay / 1000)} സെക്കൻഡിൽ വീണ്ടും ശ്രമിക്കും...`;
-                statusLabel.style.color = "#b35900";
-                await new Promise(r => setTimeout(r, delay));
+            if (isModelMissingError(data)) {
+                data = await callGemini(FALLBACK_MODEL, promptText, base64Audio, mimeType);
             }
+
+            if (data.error) {
+                return { error: data.error };
+            }
+            if (data.candidates && data.candidates[0].content.parts[0].text) {
+                return { text: data.candidates[0].content.parts[0].text };
+            }
+            return { error: { message: "മറുപടി ലഭിക്കുന്നതിൽ തകരാർ സംഭവിച്ചു." } };
         }
 
         function showApiError(err) {
@@ -886,18 +606,14 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
         }
 
         try {
+            // ഫയൽ ചെറുതാണെങ്കിലും വലുതാണെങ്കിലും നിർബന്ധമായും WebM ലേക്ക് മാറ്റുന്നു
             statusLabel.innerText = "ഫയൽ വായിക്കുന്നു...";
             statusLabel.style.color = "#b35900";
-
-            // Warn user if video file — real-time decode takes as long as the video duration
-            if (file.type.startsWith('video/') || (!file.type.startsWith('audio/') && !file.type)) {
-                statusLabel.innerText = "📹 വീഡിയോ ഫയൽ detect ചെയ്തു — audio extract ചെയ്യുന്നു. ഇതിന് ഫയലിന്റെ ദൈർഘ്യം അത്രയും സമയം എടുക്കാം...";
-            }
 
             const { audioBuffer, audioCtx } = await decodeAudioFile(file);
 
             statusLabel.innerText = "നിശബ്ദമായ ഭാഗങ്ങൾ കുറുക്കുന്നു...";
-            const trimmedBuffer = await trimSilenceYielding(audioBuffer, audioCtx);
+            const trimmedBuffer = trimSilence(audioBuffer, audioCtx);
 
             // എല്ലാ ഫയലും WebM Audio ആയി encode ചെയ്യുന്നു
             const chunks = await splitAudioBufferIntoChunks(trimmedBuffer, (done, total) => {
@@ -947,14 +663,6 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
 
             statusLabel.innerText = `റിപ്പോർട്ട് തയ്യാറാണ് ✨`;
             statusLabel.style.color = "#2e7d32";
-
-            // Save completed transcript to IndexedDB history
-            try {
-                await dbSaveTranscript(file.name, outputText.value);
-                await refreshHistoryList();
-            } catch (err) {
-                console.warn("History save failed:", err);
-            }
 
         } catch (err) {
             console.error(err);
