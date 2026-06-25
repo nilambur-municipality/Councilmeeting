@@ -131,6 +131,218 @@
         });
     }
 
+    // ===== Audio Chunking Helpers (4MB limit kazhikkan oru file aanenkilum chunks aaki split cheyyum) =====
+
+    const MAX_CHUNK_BYTES = 4 * 1024 * 1024; // 4MB per chunk (API limit kazhikkathirikkan)
+
+    // File-ine AudioBuffer aayi decode cheyyunnu (ethu format aayalum - mp3/m4a/wav okke)
+    async function decodeAudioFile(file) {
+        const arrayBuffer = await file.arrayBuffer();
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        return { audioBuffer, audioCtx };
+    }
+
+    // Browser support cheyyunna best compressed mimeType kandupidikkunnu
+    // (WAV-yekkal valare cherutha file size - 10x vare kuravu varum)
+    function pickRecorderMimeType() {
+        const candidates = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/ogg;codecs=opus',
+            'audio/mp4'
+        ];
+        for (const type of candidates) {
+            if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
+        }
+        return null; // ondum support illenkil WAV fallback aayi maarum
+    }
+
+    // AudioBuffer-ile [startSample, endSample) range, OfflineAudioContext vechu fast aayi render cheythu,
+    // MediaRecorder vechu compressed (webm/opus) Blob aayi encode cheyyunnu.
+    function renderAndEncodeChunk(audioBuffer, startSample, endSample, mimeType) {
+        return new Promise((resolve, reject) => {
+            const numChannels = audioBuffer.numberOfChannels;
+            const sampleRate = audioBuffer.sampleRate;
+            const frameCount = endSample - startSample;
+
+            // Real-time-il wait cheyyathe vegam render cheyyan OfflineAudioContext upayogikkunnu
+            const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            const offlineCtx = new OfflineCtx(numChannels, frameCount, sampleRate);
+
+            // Original buffer-il ninnu ee chunk mathram slice cheythu oru puthiya buffer aakkunnu
+            const chunkBuffer = offlineCtx.createBuffer(numChannels, frameCount, sampleRate);
+            for (let ch = 0; ch < numChannels; ch++) {
+                chunkBuffer.copyToChannel(audioBuffer.getChannelData(ch).subarray(startSample, endSample), ch);
+            }
+
+            const source = offlineCtx.createBufferSource();
+            source.buffer = chunkBuffer;
+            source.connect(offlineCtx.destination);
+            source.start();
+
+            offlineCtx.startRendering().then((renderedBuffer) => {
+                // Render cheytha audio-ine, real-time playback vazhi MediaRecorder upayogichu encode cheyyunnu
+                const liveCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const dest = liveCtx.createMediaStreamDestination();
+                const playSource = liveCtx.createBufferSource();
+                playSource.buffer = renderedBuffer;
+                playSource.connect(dest); // recording-inu mathram connect cheyyunnu, speaker-il kelkkilla
+
+                // Speech-inu 16kbps mathiyaakum nalla clarity-il - file size pakuthi aakkunnu, AI accuracy-il effect illa
+                const recorder = new MediaRecorder(dest.stream, {
+                    ...(mimeType ? { mimeType } : {}),
+                    audioBitsPerSecond: 16000
+                });
+                const recordedChunks = [];
+
+                recorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+                };
+                recorder.onstop = () => {
+                    liveCtx.close();
+                    const blob = new Blob(recordedChunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
+                    resolve(blob);
+                };
+                recorder.onerror = (e) => {
+                    liveCtx.close();
+                    reject(e.error || new Error('Recording failed'));
+                };
+
+                recorder.start();
+                playSource.start();
+                playSource.onended = () => {
+                    // Buffer flush aakkan oru chinna delay kodukkunnu
+                    setTimeout(() => recorder.stop(), 100);
+                };
+            }).catch(reject);
+        });
+    }
+
+    // AudioBuffer-ile [startSample, endSample) range-ine WAV (16-bit PCM) Blob aaki convert cheyyunnu
+    // (MediaRecorder support illenkil mathram ee fallback upayogikkum)
+    function audioBufferSliceToWavBlob(audioBuffer, startSample, endSample) {
+        const numChannels = audioBuffer.numberOfChannels;
+        const sampleRate = audioBuffer.sampleRate;
+        const frameCount = endSample - startSample;
+
+        const channelData = [];
+        for (let ch = 0; ch < numChannels; ch++) {
+            channelData.push(audioBuffer.getChannelData(ch).subarray(startSample, endSample));
+        }
+
+        const bytesPerSample = 2; // 16-bit
+        const blockAlign = numChannels * bytesPerSample;
+        const dataSize = frameCount * blockAlign;
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
+
+        function writeString(offset, str) {
+            for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+        }
+
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * blockAlign, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, 16, true);
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+
+        let offset = 44;
+        for (let i = 0; i < frameCount; i++) {
+            for (let ch = 0; ch < numChannels; ch++) {
+                let sample = channelData[ch][i];
+                sample = Math.max(-1, Math.min(1, sample));
+                view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+                offset += 2;
+            }
+        }
+
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    // Oru AudioBuffer-ine chunks aayi (samayam anusarichu) split cheythu, ഓരോന്നും compressed
+    // (webm/opus muthalava) aayi encode cheythu return cheyyunnu. MediaRecorder support
+    // illenkil mathram WAV-ilekku fallback cheyyum.
+    async function splitAudioBufferIntoChunks(audioBuffer, onProgress) {
+        const sampleRate = audioBuffer.sampleRate;
+        const totalSamples = audioBuffer.length;
+        const mimeType = pickRecorderMimeType();
+
+        // Compressed encoding cheyyumbol exact output size munpe ariyilla (variable bitrate aanu).
+        // Atukondu, oro audio second-um aprox ethra bytes varum ennu estimate cheythu chunk duration kanakkakkunnu.
+        // Opus speech-inu 16kbps vechirikkunnu (file size kurakkan); WAV fallback aanenkil PCM size exact aayi kanakkam.
+
+        let chunks = [];
+
+        if (mimeType) {
+            // 16kbps opus = ~2000 bytes/sec; safety margin vekkan 70% mathram use cheyyunnu
+            const bytesPerSecEstimate = 2000;
+            const secondsPerChunk = Math.max(15, Math.floor((MAX_CHUNK_BYTES * 0.7) / bytesPerSecEstimate));
+            const samplesPerChunk = Math.floor(secondsPerChunk * sampleRate);
+
+            let chunkIndex = 0;
+            const totalChunksEstimate = Math.ceil(totalSamples / samplesPerChunk);
+
+            for (let start = 0; start < totalSamples; start += samplesPerChunk) {
+                const end = Math.min(start + samplesPerChunk, totalSamples);
+                chunkIndex++;
+                if (onProgress) onProgress(chunkIndex, totalChunksEstimate);
+
+                let blob = await renderAndEncodeChunk(audioBuffer, start, end, mimeType);
+
+                // Estimate thettiyathukondu chunk ippozhum valuthaanenkil, koodutal cherutha pieces aayi
+                // recursively split cheyyunnu (rare case - safety net mathram).
+                if (blob.size > MAX_CHUNK_BYTES && (end - start) > sampleRate * 5) {
+                    const mid = start + Math.floor((end - start) / 2);
+                    const firstHalf = await renderAndEncodeChunk(audioBuffer, start, mid, mimeType);
+                    const secondHalf = await renderAndEncodeChunk(audioBuffer, mid, end, mimeType);
+                    chunks.push({ blob: firstHalf, startTime: start / sampleRate, endTime: mid / sampleRate, mimeType });
+                    chunks.push({ blob: secondHalf, startTime: mid / sampleRate, endTime: end / sampleRate, mimeType });
+                } else {
+                    chunks.push({ blob, startTime: start / sampleRate, endTime: end / sampleRate, mimeType });
+                }
+            }
+        } else {
+            // Fallback: browser-il MediaRecorder support illenkil WAV upayogikkum (valuthaakum pakshe correct aayirikkum)
+            const numChannels = audioBuffer.numberOfChannels;
+            const bytesPerSample = 2 * numChannels;
+            const samplesPerChunk = Math.floor((MAX_CHUNK_BYTES * 0.9) / bytesPerSample);
+
+            for (let start = 0; start < totalSamples; start += samplesPerChunk) {
+                const end = Math.min(start + samplesPerChunk, totalSamples);
+                const blob = audioBufferSliceToWavBlob(audioBuffer, start, end);
+                chunks.push({ blob, startTime: start / sampleRate, endTime: end / sampleRate, mimeType: 'audio/wav' });
+            }
+        }
+
+        return chunks;
+    }
+
+    function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = error => reject(error);
+        });
+    }
+
+
+    function formatTime(seconds) {
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
     // Website Web Scraping for Live Councilor Data
     async function fetchCouncilorsData() {
         try {
@@ -170,19 +382,17 @@
 
         uploadBtn.disabled = true;
         outputText.value = "";
-        
+
         statusLabel.innerText = "വെബ്സൈറ്റിൽ നിന്നും കൗൺസിലർമാരുടെ പുതിയ വിവരങ്ങൾ ശേഖരിക്കുന്നു...";
         statusLabel.style.color = "#b35900";
-        
+
         let liveCouncilorData = await fetchCouncilorsData();
-        
-        statusLabel.innerText = "ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... വലിയ മീറ്റിംഗുകൾക്ക് അല്പം സമയമെടുക്കും.";
-        statusLabel.style.color = "#1976d2";
 
-        try {
-            const base64Audio = await fileToBase64(file);
-            const mimeType = file.type || "audio/mp3";
+        // gemini-1.5-pro ipo shut down aayi (404 varum). Puthiya stable model: gemini-2.5-flash
+        const PRIMARY_MODEL = "gemini-2.5-flash";
+        const FALLBACK_MODEL = "gemini-2.5-pro"; // primary fail aayal ith try cheyyum
 
+        function buildPromptText(extraTimeContext) {
             let promptText = `Act as a professional Municipality Council Secretary for Nilambur Municipality (നിലമ്പൂർ മുൻസിപ്പാലിറ്റി), Kerala. Listen to this Malayalam council meeting recording. 
 
 [CONTEXT FOR SPEAKER IDENTIFICATION]: 
@@ -198,64 +408,129 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                 promptText += `\n\n[LIVE COUNCILOR DATA SCRAPED FROM WEBSITE]:\nHere is the latest raw text data from the municipality website containing the names of current elected representatives. Use this data to accurately identify and format the names of the speakers in the transcript:\n\n${liveCouncilorData}`;
             }
 
-            // gemini-1.5-pro ipo shut down aayi (404 varum). Puthiya stable model: gemini-2.5-flash
-            // Audio/diarization task ayathukondu flash thanne mathi - pro vendatilla, വേഗതയും കൂടുതലാണ്.
-            const PRIMARY_MODEL = "gemini-2.5-flash";
-            const FALLBACK_MODEL = "gemini-2.5-pro"; // primary fail aayal ith try cheyyum
-
-            async function callGemini(modelName) {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: promptText },
-                                { inlineData: { mimeType: mimeType, data: base64Audio } }
-                            ]
-                        }]
-                    })
-                });
-                return await res.json();
+            if (extraTimeContext) {
+                promptText += `\n\n${extraTimeContext}`;
             }
 
-            let data = await callGemini(PRIMARY_MODEL);
+            return promptText;
+        }
 
-            // Model not found / not supported aanenkil fallback model try cheyyum
-            const isModelMissing = data.error && (
+        async function callGemini(modelName, promptText, base64Audio, mimeType) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [
+                            { text: promptText },
+                            { inlineData: { mimeType: mimeType, data: base64Audio } }
+                        ]
+                    }]
+                })
+            });
+            return await res.json();
+        }
+
+        function isModelMissingError(data) {
+            return data.error && (
                 data.error.code === 404 ||
                 (data.error.message && data.error.message.toLowerCase().includes("not found")) ||
                 (data.error.message && data.error.message.toLowerCase().includes("not supported"))
             );
+        }
 
-            if (isModelMissing) {
-                console.warn(`${PRIMARY_MODEL} ലഭ്യമല്ല, ${FALLBACK_MODEL} ഉപയോഗിച്ച് വീണ്ടും ശ്രമിക്കുന്നു...`);
-                statusLabel.innerText = "പ്രധാന മോഡൽ ലഭ്യമല്ല, മറ്റൊരു മോഡൽ ഉപയോഗിച്ച് ശ്രമിക്കുന്നു...";
-                data = await callGemini(FALLBACK_MODEL);
+        // Oru chunk transcribe cheyyunnu, error type return cheyyunnu (success aanenkil text return cheyyum)
+        async function transcribeChunk(base64Audio, mimeType, promptText) {
+            let data = await callGemini(PRIMARY_MODEL, promptText, base64Audio, mimeType);
+
+            if (isModelMissingError(data)) {
+                data = await callGemini(FALLBACK_MODEL, promptText, base64Audio, mimeType);
             }
 
             if (data.error) {
-                console.error("API Error:", data.error);
-                if (data.error.code === 429) {
-                    statusLabel.innerText = "Error 429: ഇപ്പോൾ ഉപയോഗം കൂടുതലാണ് (Rate Limit). കുറച്ച് സമയത്തിന് ശേഷം വീണ്ടും ശ്രമിക്കുക.";
-                } else if (data.error.code === 400 || data.error.status === "INVALID_ARGUMENT" || data.error.code === 401) {
-                    statusLabel.innerText = "API Key തകരാർ: താങ്കൾ നൽകിയ കീ പ്രവർത്തിക്കുന്നില്ല. പുതിയ കീ നൽകുക.";
-                    localStorage.removeItem('swaramApiKey');
-                    checkApiKey();
+                return { error: data.error };
+            }
+            if (data.candidates && data.candidates[0].content.parts[0].text) {
+                return { text: data.candidates[0].content.parts[0].text };
+            }
+            return { error: { message: "മറുപടി ലഭിക്കുന്നതിൽ തകരാർ സംഭവിച്ചു." } };
+        }
+
+        function showApiError(err) {
+            console.error("API Error:", err);
+            if (err.code === 429) {
+                statusLabel.innerText = "Error 429: ഇപ്പോൾ ഉപയോഗം കൂടുതലാണ് (Rate Limit). കുറച്ച് സമയത്തിന് ശേഷം വീണ്ടും ശ്രമിക്കുക.";
+            } else if (err.code === 400 || err.status === "INVALID_ARGUMENT" || err.code === 401) {
+                statusLabel.innerText = "API Key തകരാർ: താങ്കൾ നൽകിയ കീ പ്രവർത്തിക്കുന്നില്ല. പുതിയ കീ നൽകുക.";
+                localStorage.removeItem('swaramApiKey');
+                checkApiKey();
+            } else {
+                statusLabel.innerText = `Error: ${err.message}`;
+            }
+            statusLabel.style.color = "#d32f2f";
+        }
+
+        try {
+            // 4MB-il koduthal aanenkil mathram chunk aaki split cheyyum, illenkil neratte process cheyyum
+            if (file.size <= MAX_CHUNK_BYTES) {
+                statusLabel.innerText = "ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... വലിയ മീറ്റിംഗുകൾക്ക് അല്പം സമയമെടുക്കും.";
+                statusLabel.style.color = "#1976d2";
+
+                const base64Audio = await fileToBase64(file);
+                const mimeType = file.type || "audio/mp3";
+                const promptText = buildPromptText(null);
+
+                const result = await transcribeChunk(base64Audio, mimeType, promptText);
+
+                if (result.error) {
+                    showApiError(result.error);
                 } else {
-                    statusLabel.innerText = `Error: ${data.error.message}`;
+                    outputText.value = result.text;
+                    statusLabel.innerText = "റിപ്പോർട്ട് തയ്യാറാക്കൽ പൂർത്തിയായി! ✨";
+                    statusLabel.style.color = "#2e7d32";
                 }
-                statusLabel.style.color = "#d32f2f";
-            } 
-            else if (data.candidates && data.candidates[0].content.parts[0].text) {
-                outputText.value = data.candidates[0].content.parts[0].text;
-                statusLabel.innerText = "റിപ്പോർട്ട് തയ്യാറാക്കൽ പൂർത്തിയായി! ✨";
+            } else {
+                // File valuthaanu - decode cheythu samayam anusarich compressed chunks aaki murikkunnu
+                statusLabel.innerText = "വലിയ ഫയൽ ആയതിനാൽ ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു...";
+                statusLabel.style.color = "#b35900";
+
+                const { audioBuffer, audioCtx } = await decodeAudioFile(file);
+
+                const chunks = await splitAudioBufferIntoChunks(audioBuffer, (done, total) => {
+                    statusLabel.innerText = `ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു... (${done} / ${total})`;
+                });
+
+                audioCtx.close();
+
+                const collectedTexts = [];
+
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+                    statusLabel.innerText = `ഭാഗം ${i + 1} / ${chunks.length} പ്രോസസ്സ് ചെയ്യുന്നു (${formatTime(chunk.startTime)} - ${formatTime(chunk.endTime)})...`;
+                    statusLabel.style.color = "#1976d2";
+
+                    const base64Audio = await blobToBase64(chunk.blob);
+                    const mimeType = chunk.mimeType || "audio/webm";
+
+                    const timeContext = `[NOTE]: This is part ${i + 1} of ${chunks.length} of a longer meeting recording, covering roughly ${formatTime(chunk.startTime)} to ${formatTime(chunk.endTime)} of the full meeting. Transcribe only what is heard in this segment. Do not repeat instructions or add a separate summary section for this part — a combined summary will be added at the end separately.`;
+                    const promptText = buildPromptText(timeContext);
+
+                    const result = await transcribeChunk(base64Audio, mimeType, promptText);
+
+                    if (result.error) {
+                        showApiError(result.error);
+                        outputText.value = collectedTexts.join("\n\n");
+                        uploadBtn.disabled = false;
+                        return;
+                    }
+
+                    collectedTexts.push(`--- ഭാഗം ${i + 1} (${formatTime(chunk.startTime)} - ${formatTime(chunk.endTime)}) ---\n${result.text}`);
+                    outputText.value = collectedTexts.join("\n\n");
+                }
+
+                statusLabel.innerText = `എല്ലാ ${chunks.length} ഭാഗങ്ങളും പൂർത്തിയായി! റിപ്പോർട്ട് തയ്യാറാണ് ✨`;
                 statusLabel.style.color = "#2e7d32";
-            } 
-            else {
-                statusLabel.innerText = "മറുപടി ലഭിക്കുന്നതിൽ തകരാർ സംഭവിച്ചു.";
-                statusLabel.style.color = "#d32f2f";
             }
 
         } catch (err) {
