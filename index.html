@@ -131,9 +131,12 @@
         });
     }
 
-    // ===== Audio Chunking Helpers (4MB limit kazhikkan oru file aanenkilum chunks aaki split cheyyum) =====
+    // ===== Audio Chunking Helpers (Gemini API-yude inline request limit ippol 100MB aanu, base64 encoded.
+    // Base64 encoding cheyyumbol size ~33% kooduthal aakum, athinodu prompt text overhead-um koodi
+    // safety margin aayi vekkunnu. Athukondu raw audio chunk size 18MB vare okay aanu
+    // (base64-il ~24MB aakum, 100MB limit-il ninnu valare margin undu). =====
 
-    const MAX_CHUNK_BYTES = 4 * 1024 * 1024; // 4MB per chunk (API limit kazhikkathirikkan)
+    const MAX_CHUNK_BYTES = 18 * 1024 * 1024; // 18MB raw audio per chunk (base64 + prompt overhead kazhinjittum safe)
 
     // File-ine AudioBuffer aayi decode cheyyunnu (ethu format aayalum - mp3/m4a/wav okke)
     async function decodeAudioFile(file) {
@@ -142,6 +145,140 @@
         const audioCtx = new AudioCtx();
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
         return { audioBuffer, audioCtx };
+    }
+
+    // ===== Silence Trimming (advanced) =====
+    // Meeting recordings-il pause/silence sadharanamaayi varum (aalkkar speak cheyyathirikkumbol).
+    // Ee silence segments-ne poornamayi cut cheyyathe, oru max duration vare cherutha aakkunnu -
+    // athukondu natural pause feel nashtamaakilla, pakshe file size kurayum, content (speech) onnum nashtamaakilla.
+
+    const SILENCE_RMS_THRESHOLD = 0.015;      // Ithil thaazhe ulla RMS energy "silence" aayi kanakkakkum
+    const SILENCE_FRAME_MS = 50;              // Eth chunk-il aanu RMS check cheyyunnathu (50ms windows)
+    const MAX_SILENCE_DURATION_SEC = 0.6;     // Oru silence segment ith vare mathram nilanirthum, baki cut cheyyum
+    const MIN_SILENCE_RUN_MS = 300;           // Ith kurach silence aanenkil touch cheyyilla (natural pause aayi vidum)
+
+    // AudioBuffer-il oro 50ms frame-um silent aano ennu RMS energy vechu check cheythu Uint8Array return cheyyunnu.
+    // Ee function trimSilence-um, chunk split point kandupidikkunna logic-um - randilum reuse cheyyunnu.
+    function findSilenceFrames(audioBuffer) {
+        const sampleRate = audioBuffer.sampleRate;
+        const numChannels = audioBuffer.numberOfChannels;
+        const totalSamples = audioBuffer.length;
+        const frameSize = Math.max(1, Math.floor(sampleRate * SILENCE_FRAME_MS / 1000));
+
+        // Channels okke combine cheythu (average) oru mono energy track undakkunnu, detection-inu mathram
+        const monoData = new Float32Array(totalSamples);
+        for (let ch = 0; ch < numChannels; ch++) {
+            const chData = audioBuffer.getChannelData(ch);
+            for (let i = 0; i < totalSamples; i++) {
+                monoData[i] += chData[i] / numChannels;
+            }
+        }
+
+        const numFrames = Math.ceil(totalSamples / frameSize);
+        const isSilentFrame = new Uint8Array(numFrames);
+        for (let f = 0; f < numFrames; f++) {
+            const start = f * frameSize;
+            const end = Math.min(start + frameSize, totalSamples);
+            let sumSquares = 0;
+            for (let i = start; i < end; i++) sumSquares += monoData[i] * monoData[i];
+            const rms = Math.sqrt(sumSquares / (end - start));
+            isSilentFrame[f] = rms < SILENCE_RMS_THRESHOLD ? 1 : 0;
+        }
+
+        return { isSilentFrame, frameSize, numFrames };
+    }
+
+    // Oru AudioBuffer-il long silence segments kandupidichu, avayude duration kurachu,
+    // puthiya (cherutha) AudioBuffer return cheyyunnu.
+    function trimSilence(audioBuffer, audioCtx) {
+        const sampleRate = audioBuffer.sampleRate;
+        const numChannels = audioBuffer.numberOfChannels;
+        const totalSamples = audioBuffer.length;
+
+        const { isSilentFrame, frameSize, numFrames } = findSilenceFrames(audioBuffer);
+
+        // Silent frame runs kandupidichu, ethu runs-um MIN_SILENCE_RUN_MS-il koduthal aanenkil mathram trim cheyyaan plan cheyyunnu
+        const minSilentFrames = Math.ceil(MIN_SILENCE_RUN_MS / SILENCE_FRAME_MS);
+        const maxKeepFrames = Math.ceil((MAX_SILENCE_DURATION_SEC * 1000) / SILENCE_FRAME_MS);
+
+        // keepRanges: [ [startSample, endSample], ... ] - final output-il ulppeduthenda sample ranges
+        const keepRanges = [];
+        let i = 0;
+        while (i < numFrames) {
+            if (!isSilentFrame[i]) {
+                // Speech frame - next silent run vare okke keep cheyyunnu
+                let j = i;
+                while (j < numFrames && !isSilentFrame[j]) j++;
+                keepRanges.push([i * frameSize, Math.min(j * frameSize, totalSamples)]);
+                i = j;
+            } else {
+                // Silent run - ethra dooram nilkkunnu ennu nokkunnu
+                let j = i;
+                while (j < numFrames && isSilentFrame[j]) j++;
+                const runLength = j - i;
+
+                if (runLength >= minSilentFrames) {
+                    // Valiya silence - max duration vare mathram keep cheyyunnu
+                    const framesToKeep = Math.min(runLength, maxKeepFrames);
+                    keepRanges.push([i * frameSize, Math.min((i + framesToKeep) * frameSize, totalSamples)]);
+                } else {
+                    // Cherutha pause - touch cheyyathe full aayi keep cheyyunnu (natural sound nilanirthaan)
+                    keepRanges.push([i * frameSize, Math.min(j * frameSize, totalSamples)]);
+                }
+                i = j;
+            }
+        }
+
+        // Mottham puthiya length calculate cheythu, puthiya AudioBuffer undakki, ranges okke copy cheyyunnu
+        let newLength = 0;
+        for (const [s, e] of keepRanges) newLength += (e - s);
+
+        if (newLength >= totalSamples || newLength === 0) {
+            // Trim cheyyaan onnum illa (silence illa, ellam already cherutha pause aayirunnu,
+            // allenkil mottham audio-um silent aanenkil original-il thanne vidunnu - crash varathirikkan)
+            return audioBuffer;
+        }
+
+        const OfflineCtxCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        const trimmedBuffer = new OfflineCtxCtor(numChannels, newLength, sampleRate).createBuffer(numChannels, newLength, sampleRate);
+
+        for (let ch = 0; ch < numChannels; ch++) {
+            const srcData = audioBuffer.getChannelData(ch);
+            const dstData = trimmedBuffer.getChannelData(ch);
+            let writeOffset = 0;
+            for (const [s, e] of keepRanges) {
+                dstData.set(srcData.subarray(s, e), writeOffset);
+                writeOffset += (e - s);
+            }
+        }
+
+        return trimmedBuffer;
+    }
+
+    // targetSample-inu chuttupadu (searchWindowSamples vare illeppurum, illeppurum) silence frame undenkil
+    // athinte center point kandupidikkunnu. Illenkil targetSample thanne (fallback) return cheyyunnu.
+    // Ithu upayogichu chunk split point sambhashanathinte idayil allathe silence-il mathram vekkam.
+    function findNearestSilenceSplitPoint(silenceInfo, targetSample, searchWindowSamples, totalSamples) {
+        const { isSilentFrame, frameSize, numFrames } = silenceInfo;
+        const targetFrame = Math.round(targetSample / frameSize);
+        const maxFrameOffset = Math.ceil(searchWindowSamples / frameSize);
+
+        // targetFrame-il ninnu outward aayi (radius 0, 1, 2, ...) silence frame kandupidikkan nokkunnu
+        for (let offset = 0; offset <= maxFrameOffset; offset++) {
+            const candidates = offset === 0 ? [targetFrame] : [targetFrame - offset, targetFrame + offset];
+            for (const f of candidates) {
+                if (f >= 0 && f < numFrames && isSilentFrame[f]) {
+                    // Ee silent frame-inte center sample-il split cheyyunnu
+                    const frameStart = f * frameSize;
+                    const frameEnd = Math.min(frameStart + frameSize, totalSamples);
+                    const center = Math.floor((frameStart + frameEnd) / 2);
+                    return Math.max(1, Math.min(center, totalSamples - 1));
+                }
+            }
+        }
+
+        // Aduthu silence onnum kittiyilla - target point thanne use cheyyunnu (rare case, speech valare continuous aanenkil)
+        return targetSample;
     }
 
     // Browser support cheyyunna best compressed mimeType kandupidikkunnu
@@ -269,13 +406,26 @@
         return new Blob([buffer], { type: 'audio/wav' });
     }
 
-    // Oru AudioBuffer-ine chunks aayi (samayam anusarichu) split cheythu, ഓരോന്നും compressed
-    // (webm/opus muthalava) aayi encode cheythu return cheyyunnu. MediaRecorder support
-    // illenkil mathram WAV-ilekku fallback cheyyum.
+    // Oru AudioBuffer-ine chunks aayi split cheythu, ഓരോന്നും compressed (webm/opus muthalava)
+    // aayi encode cheythu return cheyyunnu. Split points target interval-il ninnu ulla nearest
+    // silence-il aayirikkum vekkunnathu - athukondu sambhashanam orikkalum chunk boundary-il muriyilla.
+    // MediaRecorder support illenkil mathram WAV-ilekku fallback cheyyum.
     async function splitAudioBufferIntoChunks(audioBuffer, onProgress) {
         const sampleRate = audioBuffer.sampleRate;
         const totalSamples = audioBuffer.length;
         const mimeType = pickRecorderMimeType();
+
+        // Split points sambhashanathinte idayil allathe silence-il mathram vekkaan, silence frames
+        // onnu compute cheythu vekkunnu (split logic + chunk-size-safety-net rendukkum reuse cheyyum)
+        const silenceInfo = findSilenceFrames(audioBuffer);
+        const SPLIT_SEARCH_WINDOW_SEC = 12; // target point-il ninnu ith vare aduthekkum akalekkum silence thedum
+
+        function nextSplitPoint(targetSample) {
+            if (targetSample >= totalSamples) return totalSamples;
+            return findNearestSilenceSplitPoint(
+                silenceInfo, targetSample, SPLIT_SEARCH_WINDOW_SEC * sampleRate, totalSamples
+            );
+        }
 
         // Compressed encoding cheyyumbol exact output size munpe ariyilla (variable bitrate aanu).
         // Atukondu, oro audio second-um aprox ethra bytes varum ennu estimate cheythu chunk duration kanakkakkunnu.
@@ -289,27 +439,37 @@
             const secondsPerChunk = Math.max(15, Math.floor((MAX_CHUNK_BYTES * 0.7) / bytesPerSecEstimate));
             const samplesPerChunk = Math.floor(secondsPerChunk * sampleRate);
 
+            // Munpe ethra chunks varum ennu estimate cheyyunnu (progress bar-inu mathram, exact aakanam ennilla
+            // - silence snapping kondu chunk-kalude actual ennam kurach vyathyasam varaam)
+            const totalChunksEstimate = Math.max(1, Math.ceil(totalSamples / samplesPerChunk));
             let chunkIndex = 0;
-            const totalChunksEstimate = Math.ceil(totalSamples / samplesPerChunk);
 
-            for (let start = 0; start < totalSamples; start += samplesPerChunk) {
-                const end = Math.min(start + samplesPerChunk, totalSamples);
+            let start = 0;
+            while (start < totalSamples) {
+                const targetEnd = start + samplesPerChunk;
+                const end = nextSplitPoint(targetEnd);
+
                 chunkIndex++;
                 if (onProgress) onProgress(chunkIndex, totalChunksEstimate);
 
                 let blob = await renderAndEncodeChunk(audioBuffer, start, end, mimeType);
 
                 // Estimate thettiyathukondu chunk ippozhum valuthaanenkil, koodutal cherutha pieces aayi
-                // recursively split cheyyunnu (rare case - safety net mathram).
+                // recursively split cheyyunnu (rare case - safety net mathram). Ee split-um silence-il vekkunnu.
                 if (blob.size > MAX_CHUNK_BYTES && (end - start) > sampleRate * 5) {
-                    const mid = start + Math.floor((end - start) / 2);
-                    const firstHalf = await renderAndEncodeChunk(audioBuffer, start, mid, mimeType);
-                    const secondHalf = await renderAndEncodeChunk(audioBuffer, mid, end, mimeType);
-                    chunks.push({ blob: firstHalf, startTime: start / sampleRate, endTime: mid / sampleRate, mimeType });
-                    chunks.push({ blob: secondHalf, startTime: mid / sampleRate, endTime: end / sampleRate, mimeType });
+                    const midTarget = start + Math.floor((end - start) / 2);
+                    const mid = nextSplitPoint(midTarget);
+                    const safeMid = (mid > start && mid < end) ? mid : midTarget; // edge case safety
+
+                    const firstHalf = await renderAndEncodeChunk(audioBuffer, start, safeMid, mimeType);
+                    const secondHalf = await renderAndEncodeChunk(audioBuffer, safeMid, end, mimeType);
+                    chunks.push({ blob: firstHalf, startTime: start / sampleRate, endTime: safeMid / sampleRate, mimeType });
+                    chunks.push({ blob: secondHalf, startTime: safeMid / sampleRate, endTime: end / sampleRate, mimeType });
                 } else {
                     chunks.push({ blob, startTime: start / sampleRate, endTime: end / sampleRate, mimeType });
                 }
+
+                start = end;
             }
         } else {
             // Fallback: browser-il MediaRecorder support illenkil WAV upayogikkum (valuthaakum pakshe correct aayirikkum)
@@ -317,10 +477,13 @@
             const bytesPerSample = 2 * numChannels;
             const samplesPerChunk = Math.floor((MAX_CHUNK_BYTES * 0.9) / bytesPerSample);
 
-            for (let start = 0; start < totalSamples; start += samplesPerChunk) {
-                const end = Math.min(start + samplesPerChunk, totalSamples);
+            let start = 0;
+            while (start < totalSamples) {
+                const targetEnd = start + samplesPerChunk;
+                const end = nextSplitPoint(targetEnd);
                 const blob = audioBufferSliceToWavBlob(audioBuffer, start, end);
                 chunks.push({ blob, startTime: start / sampleRate, endTime: end / sampleRate, mimeType: 'audio/wav' });
+                start = end;
             }
         }
 
@@ -336,12 +499,6 @@
         });
     }
 
-
-    function formatTime(seconds) {
-        const m = Math.floor(seconds / 60);
-        const s = Math.floor(seconds % 60);
-        return `${m}:${s.toString().padStart(2, '0')}`;
-    }
 
     // Website Web Scraping for Live Councilor Data
     async function fetchCouncilorsData() {
@@ -491,13 +648,18 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                     statusLabel.style.color = "#2e7d32";
                 }
             } else {
-                // File valuthaanu - decode cheythu samayam anusarich compressed chunks aaki murikkunnu
-                statusLabel.innerText = "വലിയ ഫയൽ ആയതിനാൽ ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു...";
+                // File valuthaanu - decode cheythu, silence trim cheythu, samayam anusarich compressed chunks aaki murikkunnu
+                statusLabel.innerText = "ഓഡിയോ ഫയൽ വായിക്കുന്നു...";
                 statusLabel.style.color = "#b35900";
 
                 const { audioBuffer, audioCtx } = await decodeAudioFile(file);
 
-                const chunks = await splitAudioBufferIntoChunks(audioBuffer, (done, total) => {
+                statusLabel.innerText = "നിശബ്ദമായ ഭാഗങ്ങൾ (silence) കുറുക്കി ഫയൽ ചെറുതാക്കുന്നു...";
+                const trimmedBuffer = trimSilence(audioBuffer, audioCtx);
+
+                statusLabel.innerText = "വലിയ ഫയൽ ആയതിനാൽ ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു...";
+
+                const chunks = await splitAudioBufferIntoChunks(trimmedBuffer, (done, total) => {
                     statusLabel.innerText = `ഭാഗങ്ങളായി തിരിച്ച് compress ചെയ്യുന്നു... (${done} / ${total})`;
                 });
 
@@ -507,13 +669,13 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
 
                 for (let i = 0; i < chunks.length; i++) {
                     const chunk = chunks[i];
-                    statusLabel.innerText = `ഭാഗം ${i + 1} / ${chunks.length} പ്രോസസ്സ് ചെയ്യുന്നു (${formatTime(chunk.startTime)} - ${formatTime(chunk.endTime)})...`;
+                    statusLabel.innerText = `ഭാഗം ${i + 1} / ${chunks.length} പ്രോസസ്സ് ചെയ്യുന്നു...`;
                     statusLabel.style.color = "#1976d2";
 
                     const base64Audio = await blobToBase64(chunk.blob);
                     const mimeType = chunk.mimeType || "audio/webm";
 
-                    const timeContext = `[NOTE]: This is part ${i + 1} of ${chunks.length} of a longer meeting recording, covering roughly ${formatTime(chunk.startTime)} to ${formatTime(chunk.endTime)} of the full meeting. Transcribe only what is heard in this segment. Do not repeat instructions or add a separate summary section for this part — a combined summary will be added at the end separately.`;
+                    const timeContext = `[NOTE]: This is part ${i + 1} of ${chunks.length} of a longer meeting recording, in sequential order. Transcribe only what is heard in this segment. Do not repeat instructions or add a separate summary section for this part — a combined summary will be added at the end separately.`;
                     const promptText = buildPromptText(timeContext);
 
                     const result = await transcribeChunk(base64Audio, mimeType, promptText);
@@ -525,7 +687,7 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                         return;
                     }
 
-                    collectedTexts.push(`--- ഭാഗം ${i + 1} (${formatTime(chunk.startTime)} - ${formatTime(chunk.endTime)}) ---\n${result.text}`);
+                    collectedTexts.push(`--- ഭാഗം ${i + 1} ---\n${result.text}`);
                     outputText.value = collectedTexts.join("\n\n");
                 }
 
