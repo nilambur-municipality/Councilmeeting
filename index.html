@@ -24,24 +24,13 @@
             padding: 15px; margin-bottom: 20px; text-align: left;
         }
         
-        .api-input-container {
-            display: flex; align-items: center; gap: 10px; margin-top: 8px;
+        input[type="file"] {
+            width: 100%; padding: 12px; margin-top: 10px; border: 1px solid #ccc;
+            border-radius: 5px; box-sizing: border-box; background: white; font-size: 14px;
         }
         
-        input[type="text"], input[type="password"], input[type="file"] {
-            width: 100%; padding: 10px; border: 1px solid #ccc;
-            border-radius: 5px; box-sizing: border-box; background: white;
-        }
-        
-        .btn-toggle {
-            background-color: #e0e0e0; color: #333; padding: 10px 15px;
-            border: 1px solid #ccc; border-radius: 5px; cursor: pointer;
-            font-size: 14px; white-space: nowrap; transition: 0.3s;
-        }
-        .btn-toggle:hover { background-color: #d5d5d5; }
-
         button {
-            padding: 12px 20px; font-size: 15px; font-weight: bold; border: none;
+            padding: 14px 20px; font-size: 15px; font-weight: bold; border: none;
             border-radius: 8px; cursor: pointer; transition: all 0.3s ease; width: 100%; margin-top: 15px;
         }
         .btn-green { background-color: #2e7d32; color: white; }
@@ -51,11 +40,10 @@
         .status { font-weight: bold; margin: 15px 0; color: #d32f2f; font-size: 15px;}
         
         textarea {
-            width: 100%; height: 250px; padding: 15px; border: 1px solid #a5d6a7;
+            width: 100%; height: 300px; padding: 15px; border: 1px solid #a5d6a7;
             border-radius: 8px; background-color: #fff; resize: vertical;
             font-size: 15px; line-height: 1.6; box-sizing: border-box;
         }
-        .small-text { font-size: 12px; color: #666; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -65,52 +53,32 @@
     <div class="subtitle">Nilambur Council Meeting Assistant</div>
 
     <div class="section-box">
-        <label><b>1. Gemini API Key:</b></label>
-        <div class="api-input-container">
-            <input type="password" id="apiKey" value="AQ.Ab8RN6JzUVoGKN-l1i24bpJNVVjw4a_5Oshf76cB4pw9Gv9-Kg" placeholder="പുതിയ Key ഇവിടെ നൽകാം">
-            <button type="button" id="toggleApiKey" class="btn-toggle">👁️ കാണുക</button>
-        </div>
-        <div class="small-text">കീ മാറ്റണമെങ്കിൽ പഴയത് മായ്ച്ചു കളഞ്ഞ് പുതിയത് നൽകുക.</div>
-    </div>
-
-    <div class="section-box">
-        <label><b>2. റെക്കോർഡ് ചെയ്ത മീറ്റിംഗ് ഓഡിയോ (MP3/M4A):</b></label>
+        <label><b>🎙️ മീറ്റിംഗ് ഓഡിയോ നൽകുക (MP3/M4A):</b></label>
         <input type="file" id="audioFile" accept="audio/*">
         <button id="uploadBtn" class="btn-green">📤 Upload & Transcribe</button>
     </div>
 
     <div class="status" id="statusLabel">ഓഡിയോ ഫയൽ അപ്‌ലോഡ് ചെയ്യാൻ തയ്യാറാണ്...</div>
 
-    <textarea id="outputText" placeholder="മീറ്റിംഗ് റിപ്പോർട്ടും തീരുമാനങ്ങളും ഇവിടെ അക്ഷരങ്ങളായി വരും..."></textarea>
+    <textarea id="outputText" placeholder="നിലമ്പൂർ മുനിസിപ്പാലിറ്റി മീറ്റിംഗ് റിപ്പോർട്ടും തീരുമാനങ്ങളും ഇവിടെ അക്ഷരങ്ങളായി വരും..."></textarea>
     <button id="copyBtn" class="btn-blue">📋 Copy Full Report</button>
 </div>
 
 <script>
-    const apiKeyInput = document.getElementById('apiKey');
-    const toggleApiKeyBtn = document.getElementById('toggleApiKey');
     const audioFileInput = document.getElementById('audioFile');
     const uploadBtn = document.getElementById('uploadBtn');
     const statusLabel = document.getElementById('statusLabel');
     const outputText = document.getElementById('outputText');
     const copyBtn = document.getElementById('copyBtn');
 
-    // Hide/Unhide 
-    toggleApiKeyBtn.addEventListener('click', () => {
-        if (apiKeyInput.type === 'password') {
-            apiKeyInput.type = 'text';
-            toggleApiKeyBtn.innerText = '🙈 മറയ്ക്കുക';
-        } else {
-            apiKeyInput.type = 'password';
-            toggleApiKeyBtn.innerText = '👁️ കാണുക';
-        }
-    });
-
-    window.onload = () => {
-        const savedKey = localStorage.getItem('swaramApiKey');
-        if (savedKey && savedKey !== "") {
-            apiKeyInput.value = savedKey;
-        }
-    };
+    // =======================================================
+    // പുതിയ API Key Inbuilt & Hidden (Reverse String Encryption)
+    // =======================================================
+    const _secretCode = "w_jp1Z2EuXP3t3iNjTALucW68ZkGgK-wU733JjC5kMrMJ6NR8bA.QA";
+    
+    function getDecodedKey() {
+        return _secretCode.split('').reverse().join('');
+    }
 
     function fileToBase64(file) {
         return new Promise((resolve, reject) => {
@@ -122,23 +90,19 @@
     }
 
     // ==========================================
-    // മുൻസിപ്പാലിറ്റി വെബ്സൈറ്റിൽ നിന്നും വിവരങ്ങൾ എടുക്കുന്ന ഫംഗ്ഷൻ (Web Scraping)
+    // Municipality Website Web Scraping
     // ==========================================
     async function fetchCouncilorsData() {
         try {
-            // LSG വെബ്സൈറ്റ് ലിങ്ക്
             const targetUrl = 'https://nilamburmunicipality.lsgkerala.gov.in/en/Elected%20representatives';
-            // CORS മറികടക്കാൻ AllOrigins Proxy ഉപയോഗിക്കുന്നു
             const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
             
             const response = await fetch(proxyUrl);
             const data = await response.json();
             
-            // വെബ്സൈറ്റിലെ കോഡുകൾ (HTML) എടുക്കുന്നു
             const parser = new DOMParser();
             const doc = parser.parseFromString(data.contents, 'text/html');
             
-            // ടേബിളുകളിൽ നിന്നുള്ള അക്ഷരങ്ങൾ മാത്രം വേർതിരിക്കുന്നു
             let extractedText = "";
             const tables = doc.querySelectorAll('table');
             tables.forEach(table => {
@@ -146,61 +110,51 @@
             });
 
             if (extractedText.trim().length > 10) {
-                return extractedText; // വിവരങ്ങൾ കിട്ടിയാൽ അത് തിരികെ നൽകും
+                return extractedText;
             } else {
                 return null;
             }
         } catch (error) {
             console.error("Scraping Error:", error);
-            return null; // പരാജയപ്പെട്ടാൽ null നൽകും
+            return null;
         }
     }
 
     uploadBtn.addEventListener('click', async () => {
-        const apiKey = apiKeyInput.value.trim();
         const file = audioFileInput.files[0];
-
-        if (!apiKey) {
-            alert("ദയവായി Gemini API Key നൽകുക!"); return;
-        }
         if (!file) {
-            alert("റെക്കോർഡ് ചെയ്ത ഓഡിയോ ഫയൽ തിരഞ്ഞെടുക്കുക!"); return;
+            alert("ദയവായി റെക്കോർഡ് ചെയ്ത ഓഡിയോ ഫയൽ തിരഞ്ഞെടുക്കുക!"); return;
         }
-
-        localStorage.setItem('swaramApiKey', apiKey);
 
         uploadBtn.disabled = true;
         outputText.value = "";
         
-        // ഘട്ടം 1: വെബ്സൈറ്റിൽ നിന്നും ഡാറ്റ എടുക്കുന്നു
-        statusLabel.innerText = "വെബ്സൈറ്റിൽ നിന്നും കൗൺസിലർമാരുടെ വിവരങ്ങൾ ശേഖരിക്കുന്നു...";
+        statusLabel.innerText = "വെബ്സൈറ്റിൽ നിന്നും കൗൺസിലർമാരുടെ പുതിയ വിവരങ്ങൾ ശേഖരിക്കുന്നു...";
         statusLabel.style.color = "#b35900";
         
         let liveCouncilorData = await fetchCouncilorsData();
         
-        statusLabel.innerText = "ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... കാത്തിരിക്കുക.";
+        statusLabel.innerText = "ഓഡിയോ പ്രോസസ്സ് ചെയ്യുന്നു... വലിയ മീറ്റിംഗുകൾക്ക് അല്പം സമയമെടുക്കും.";
         statusLabel.style.color = "#1976d2";
 
         try {
             const base64Audio = await fileToBase64(file);
             const mimeType = file.type || "audio/mp3";
+            const apiKey = getDecodedKey();
 
-            // ഘട്ടം 2: പ്രോംപ്റ്റ് തയ്യാറാക്കുന്നു (വെബ്സൈറ്റ് ഡാറ്റയോടൊപ്പം)
             let promptText = `Act as a professional Municipality Council Secretary for Nilambur Municipality. Listen to this Malayalam council meeting recording.
 1. Transcribe the discussion clearly in Malayalam.
-2. Fix all grammatical and speech errors.
-3. Identify different speakers accurately.
-4. Provide a clear summary of the key decisions taken at the end.`;
+2. Fix all grammatical and speech errors to make it an official document.
+3. Identify different speakers accurately by matching their names when someone is addressed.
+4. Provide a clear, bulleted summary of the Key Decisions taken at the end.`;
 
             if (liveCouncilorData) {
-                // വെബ്സൈറ്റിൽ നിന്നും ഡാറ്റ കിട്ടിയാൽ അത് ജെമിനിക്ക് നൽകുന്നു
                 promptText += `\n\n[LIVE COUNCILOR DATA SCRAPED FROM WEBSITE]:\nHere is the latest raw text data from the municipality website containing the names of current elected representatives. Use this data to accurately identify and format the names of the speakers in the transcript (e.g., "ചെയർപേഴ്സൺ [Name]:", "കൗൺസിലർ [Name]:"):\n\n${liveCouncilorData}`;
             } else {
-                // വെബ്സൈറ്റ് വർക്ക് ചെയ്തില്ലെങ്കിൽ പഴയ ബാക്കപ്പ് ഡാറ്റ ഉപയോഗിക്കും
                 promptText += `\n\n[BACKUP CONTEXT FOR SPEAKER IDENTIFICATION]:\nThe current leadership includes Chairperson Padmini Gopinath, Vice Chairperson Shoukkathali Koomanchery, and Secretary Ferose Khan. The council consists of 33 ward members including Gireesh Moloormadathil, Aruma P T, Bushra Muneeb, Mumthas, Sameera K P, Velukutty N, Hamza P V, Musthafa K, Asrath, P M Basheer, Kunhimuhammed, Suresh P, Sreeja, Thongodan Sundaran, Sherly Mol, E S Mujeeb, Paloly Mehaboob, Geetha, Adukkath Ishak, Naicy, Gopinathan, Noorjahan P, Subaida Thattarasseri, Gopalakrishnan P, Unnikrishnan, Shareefa, Daisy Chacko, Mujeeb Devasseri, Sindhu, Sumeera P, Radha P, Binu.`;
             }
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
             const response = await fetch(url, {
                 method: 'POST',
@@ -219,9 +173,7 @@
 
             if (data.error) {
                 if (data.error.code === 429) {
-                    statusLabel.innerText = "Error 429: ഫയലിന്റെ വലിപ്പം കൂടുതലാണ്.";
-                } else if (data.error.code === 400 || data.error.status === "INVALID_ARGUMENT") {
-                    statusLabel.innerText = "API Key തകരാർ: ശരിയായ Key നൽകുക.";
+                    statusLabel.innerText = "Error 429: ഫയലിന്റെ വലിപ്പം കൂടുതലാണ്. ചെറിയ ഫയലുകൾ നൽകുക.";
                 } else {
                     statusLabel.innerText = `Error: ${data.error.message}`;
                 }
