@@ -64,6 +64,16 @@
             </div>
             <div id="fastModeNote" class="small-text" style="display:none; color: #f57c00;">⚠️ Fast mode: silence trimming ഇല്ല, ഫയൽ നേരിട്ട് അയക്കും. ചെറിയ ഫയലുകൾക്ക് (< 18MB) ഏറ്റവും നല്ലത്. വലിയ ഫയലുകൾ API limit കാരണം reject ആകാം.</div>
 
+            <!-- Speaker Profiles Section -->
+            <div style="margin-top: 16px; border-top: 1px dashed #a5d6a7; padding-top: 14px;">
+                <label class="mode-label"><b>🎤 Speaker Voice Profiles (ഓപ്ഷണൽ):</b></label>
+                <div class="small-text" style="margin-bottom:10px;">സ്പീക്കറുടെ പേരും ചെറിയ ഓഡിയോ സാമ്പിളും നൽകിയാൽ AI കൂടുതൽ accurate ആയി identify ചെയ്യും. ഒരിക്കൽ save ചെയ്താൽ ഫോണിൽ സൂക്ഷിക്കും.</div>
+                <input type="text" id="speakerNameInput" placeholder="പേര് (ഉദാ: Padmini Gopinath)" style="width:100%; padding:10px; border:2px solid #e0e0e0; border-radius:8px; box-sizing:border-box; margin-bottom:8px; font-size:14px; background:#f9fbe7;">
+                <input type="file" id="speakerAudioInput" accept="audio/*,video/*" style="margin-top:0;">
+                <button id="addSpeakerBtn" class="btn-outline" style="margin-top:8px;">➕ ചേർക്കുക</button>
+                <div id="speakerList" style="margin-top:10px;"></div>
+            </div>
+
             <button id="uploadBtn" class="btn-green">📤 Convert & Transcribe</button>
             <button id="resetKeyBtn" class="btn-outline">⚙️ Change API Key</button>
         </div>

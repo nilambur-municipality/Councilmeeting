@@ -15,13 +15,103 @@ const progressFill = document.getElementById('progressFill');
 
 const CACHE_KEY = 'swaramCouncilorData';
 const CACHE_TIME_KEY = 'swaramCouncilorDataTime';
-const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; 
+const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+
+// ===== SPEAKER PROFILES — IndexedDB =====
+const SPEAKER_DB_NAME = 'swaramSpeakers';
+const SPEAKER_DB_VERSION = 1;
+const SPEAKER_STORE = 'profiles';
+
+function openSpeakerDB() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(SPEAKER_DB_NAME, SPEAKER_DB_VERSION);
+        req.onupgradeneeded = e => {
+            e.target.result.createObjectStore(SPEAKER_STORE, { keyPath: 'id', autoIncrement: true });
+        };
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+    });
+}
+
+async function saveSpeaker(name, base64Audio, mimeType) {
+    const db = await openSpeakerDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(SPEAKER_STORE, 'readwrite');
+        tx.objectStore(SPEAKER_STORE).add({ name, base64Audio, mimeType, savedAt: Date.now() });
+        tx.oncomplete = resolve;
+        tx.onerror = e => reject(e.target.error);
+    });
+}
+
+async function getAllSpeakers() {
+    const db = await openSpeakerDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(SPEAKER_STORE, 'readonly');
+        const req = tx.objectStore(SPEAKER_STORE).getAll();
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+    });
+}
+
+async function deleteSpeaker(id) {
+    const db = await openSpeakerDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(SPEAKER_STORE, 'readwrite');
+        tx.objectStore(SPEAKER_STORE).delete(id);
+        tx.oncomplete = resolve;
+        tx.onerror = e => reject(e.target.error);
+    });
+}
+
+async function renderSpeakerList() {
+    const list = document.getElementById('speakerList');
+    if (!list) return;
+    const speakers = await getAllSpeakers();
+    if (speakers.length === 0) {
+        list.innerHTML = '<div class="small-text" style="color:#90a4ae;">ഇതുവരെ ആരെയും ചേർത്തിട്ടില്ല.</div>';
+        return;
+    }
+    list.innerHTML = speakers.map(s => `
+        <div class="speaker-chip-row">
+            <span class="speaker-name-tag">🎤 ${s.name}</span>
+            <button class="speaker-delete-btn" onclick="handleDeleteSpeaker(${s.id})">✕</button>
+        </div>
+    `).join('');
+}
+
+window.handleDeleteSpeaker = async (id) => {
+    await deleteSpeaker(id);
+    renderSpeakerList();
+};
+
+async function setupSpeakerUI() {
+    const addBtn = document.getElementById('addSpeakerBtn');
+    if (!addBtn) return;
+    addBtn.addEventListener('click', async () => {
+        const nameInput = document.getElementById('speakerNameInput');
+        const fileInput = document.getElementById('speakerAudioInput');
+        const name = nameInput.value.trim();
+        const file = fileInput.files[0];
+        if (!name) { alert('പേര് നൽകുക!'); return; }
+        if (!file) { alert('ഓഡിയോ സാമ്പിൾ നൽകുക!'); return; }
+        addBtn.disabled = true;
+        addBtn.innerText = 'സേവ് ചെയ്യുന്നു...';
+        const base64Audio = await blobToBase64(file);
+        await saveSpeaker(name, base64Audio, file.type || 'audio/mpeg');
+        nameInput.value = '';
+        fileInput.value = '';
+        addBtn.disabled = false;
+        addBtn.innerText = '➕ ചേർക്കുക';
+        renderSpeakerList();
+    });
+    renderSpeakerList();
+}
 
 window.onload = () => { 
     checkApiKey(); 
     updateCouncilorDataInBackground();
+    setupSpeakerUI();
 
-    // Fast mode note toggle
     document.querySelectorAll('input[name="uploadMode"]').forEach(radio => {
         radio.addEventListener('change', () => {
             const note = document.getElementById('fastModeNote');
@@ -414,9 +504,17 @@ uploadBtn.addEventListener('click', async () => {
     const PRIMARY_MODEL = "gemini-2.5-flash";
     const FALLBACK_MODEL = "gemini-2.5-pro"; 
 
-    function buildPromptText(extraTimeContext) {
+    async function buildPromptText(extraTimeContext) {
         const outputMode = document.querySelector('input[name="outputMode"]:checked')?.value || 'minutes';
         const isTranscribeOnly = outputMode === 'transcribe';
+
+        // Speaker profiles from IndexedDB
+        const speakers = await getAllSpeakers();
+        const hasSpeakers = speakers.length > 0;
+
+        const speakerReferenceNote = hasSpeakers
+            ? `\n\n[VOICE REFERENCE SAMPLES]: The following named speakers have provided audio samples. Use them to identify who is speaking throughout the recording. Match voices carefully:\n${speakers.map((s, i) => `Speaker ${i + 1}: ${s.name}`).join('\n')}\nIf a speaker cannot be matched to any sample or name from the council list, label them as "Person 1", "Person 2", etc. consistently.`
+            : `\n\nIf a speaker cannot be identified from context or name mentions, label them as "Person 1", "Person 2", etc. consistently.`;
 
         let promptText;
 
@@ -427,7 +525,7 @@ uploadBtn.addEventListener('click', async () => {
 The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson Shoukkathali Koomanchery, and Secretary Ferose Khan. The council consists of 33 ward members including Gireesh Moloormadathil, Aruma P T, Bushra Muneeb, Mumthas, Sameera K P, Velukutty N, Hamza P V, Musthafa K, Asrath, P M Basheer, Kunhimuhammed, Suresh P, Sreeja, Thongodan Sundaran, Sherly Mol, E S Mujeeb, Paloly Mehaboob, Geetha, Adukkath Ishak, Naicy, Gopinathan, Noorjahan P, Subaida Thattarasseri, Gopalakrishnan P, Unnikrishnan, Shareefa, Daisy Chacko, Mujeeb Devasseri, Sindhu, Sumeera P, Radha P, Binu.
 
 [TASK]:
-Transcribe ONLY what is spoken. Output raw Malayalam speech as text. Identify speakers where possible using format "സ്പീക്കർ നാമം:". Do NOT add summaries, headings, formatting, decisions list, or any editorial content. Just the spoken words.`;
+Transcribe ONLY what is spoken. Output raw Malayalam speech as text. Identify speakers where possible using format "സ്പീക്കർ നാമം:". Do NOT add summaries, headings, formatting, decisions list, or any editorial content. Just the spoken words.${speakerReferenceNote}`;
         } else {
             promptText = `Act as a professional Municipality Council Secretary for Nilambur Municipality (നിലമ്പൂർ മുൻസിപ്പാലിറ്റി), Kerala. Listen to this Malayalam council meeting recording. 
 
@@ -438,7 +536,7 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
 1. Transcribe the discussion clearly in Malayalam.
 2. Fix all grammatical and speech errors to make it an official document.
 3. Identify different speakers accurately by matching their names from the current council list when someone is addressed. Use formats like "ചെയർപേഴ്സൺ പത്മിനി ഗോപിനാഥ്:" or "സെക്രട്ടറി ഫിറോസ് ഖാൻ:".
-4. Provide a clear, bulleted summary of the Key Decisions taken at the end.`;
+4. Provide a clear, bulleted summary of the Key Decisions taken at the end.${speakerReferenceNote}`;
         }
 
         if (liveCouncilorData) {
@@ -449,10 +547,10 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
             promptText += `\n\n${extraTimeContext}`;
         }
 
-        return promptText;
+        return { promptText, speakers };
     }
 
-    async function callGemini(modelName, promptText, base64Audio, mimeType) {
+    async function callGemini(modelName, promptText, base64Audio, mimeType, speakers = []) {
         return new Promise((resolve, reject) => {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
             const xhr = new XMLHttpRequest();
@@ -462,14 +560,13 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
             progressContainer.style.display = 'block';
             progressFill.style.width = '0%';
             progressFill.innerText = '0%';
-            progressFill.className = 'bg-uploading'; // ഗൂഗിളിലേക്ക് പോകുമ്പോൾ പച്ച നിറം
+            progressFill.className = 'bg-uploading';
 
             xhr.upload.onprogress = function(e) {
                 if (e.lengthComputable) {
                     const percentComplete = Math.round((e.loaded / e.total) * 100);
                     progressFill.style.width = percentComplete + '%';
                     progressFill.innerText = percentComplete + '% അപ്‌ലോഡ് ചെയ്തു...';
-                    
                     if(percentComplete === 100) {
                         progressFill.innerText = 'AI വിശകലനം ചെയ്യുന്നു... കാത്തിരിക്കുക';
                     }
@@ -479,7 +576,6 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
             xhr.onload = function() {
                 progressContainer.style.display = 'none';
                 progressFill.style.width = '0%'; 
-                
                 if (xhr.status >= 200 && xhr.status < 300) {
                     resolve(JSON.parse(xhr.responseText));
                 } else {
@@ -496,15 +592,16 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                 resolve({ error: { message: "Network Error: അപ്‌ലോഡിംഗ് പരാജയപ്പെട്ടു." } });
             };
 
-            const body = JSON.stringify({
-                contents: [{
-                    parts: [
-                        { text: promptText },
-                        { inlineData: { mimeType: mimeType, data: base64Audio } }
-                    ]
-                }]
+            // Build parts: speaker samples first, then main audio
+            const parts = [];
+            speakers.forEach((s, i) => {
+                parts.push({ text: `[VOICE SAMPLE of Speaker ${i + 1}: ${s.name}]` });
+                parts.push({ inlineData: { mimeType: s.mimeType, data: s.base64Audio } });
             });
-            
+            parts.push({ text: promptText });
+            parts.push({ inlineData: { mimeType: mimeType, data: base64Audio } });
+
+            const body = JSON.stringify({ contents: [{ parts }] });
             xhr.send(body);
         });
     }
@@ -517,11 +614,11 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
         );
     }
 
-    async function transcribeChunk(base64Audio, mimeType, promptText) {
-        let data = await callGemini(PRIMARY_MODEL, promptText, base64Audio, mimeType);
+    async function transcribeChunk(base64Audio, mimeType, promptText, speakers = []) {
+        let data = await callGemini(PRIMARY_MODEL, promptText, base64Audio, mimeType, speakers);
 
         if (isModelMissingError(data)) {
-            data = await callGemini(FALLBACK_MODEL, promptText, base64Audio, mimeType);
+            data = await callGemini(FALLBACK_MODEL, promptText, base64Audio, mimeType, speakers);
         }
 
         if (data.error) {
@@ -565,8 +662,8 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
 
             const base64Audio = await blobToBase64(file);
             const mimeType = file.type || 'audio/mpeg';
-            const promptText = buildPromptText(null);
-            const result = await transcribeChunk(base64Audio, mimeType, promptText);
+            const { promptText, speakers } = await buildPromptText(null);
+            const result = await transcribeChunk(base64Audio, mimeType, promptText, speakers);
 
             if (result.error) { showApiError(result.error); uploadBtn.disabled = false; return; }
             outputText.value = result.text;
@@ -621,9 +718,8 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
                 ? `[NOTE]: This is part ${i + 1} of ${chunks.length} of a longer meeting recording. Transcribe only what is heard in this segment. Do not repeat instructions or add a combined summary.` 
                 : null;
                 
-            const promptText = buildPromptText(timeContext);
-
-            const result = await transcribeChunk(base64Audio, mimeType, promptText);
+            const { promptText, speakers } = await buildPromptText(timeContext);
+            const result = await transcribeChunk(base64Audio, mimeType, promptText, speakers);
 
             if (result.error) {
                 showApiError(result.error);
