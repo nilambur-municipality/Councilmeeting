@@ -30,14 +30,18 @@ window.onload = () => {
     });
 };
 
+const tributeText = document.getElementById('tributeText');
+
 function checkApiKey() {
     const savedKey = localStorage.getItem('swaramApiKey');
     if (savedKey && (savedKey.startsWith("AQ.") || savedKey.startsWith("AIza"))) {
         setupSection.style.display = 'none';
         mainSection.style.display = 'block';
+        tributeText.style.display = 'block';
     } else {
         setupSection.style.display = 'block';
         mainSection.style.display = 'none';
+        tributeText.style.display = 'none';
     }
 }
 
