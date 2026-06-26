@@ -23,6 +23,36 @@
         <div class="section-box" style="background: #e8f5e9;">
             <label><b>🎙️ മീറ്റിംഗ് ഓഡിയോ / വീഡിയോ നൽകുക:</b></label>
             <input type="file" id="audioFile" accept="audio/*, video/*">
+
+            <div class="mode-toggle-row">
+                <label class="mode-label"><b>⚙️ മോഡ് തിരഞ്ഞെടുക്കുക:</b></label>
+                <div class="mode-chips">
+                    <label class="chip-label">
+                        <input type="radio" name="outputMode" value="minutes" checked>
+                        <span class="chip">📋 Minutes (Full Report)</span>
+                    </label>
+                    <label class="chip-label">
+                        <input type="radio" name="outputMode" value="transcribe">
+                        <span class="chip">🎤 Transcribe Only</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="mode-toggle-row" style="margin-top:12px;">
+                <label class="mode-label"><b>⚡ Upload Speed:</b></label>
+                <div class="mode-chips">
+                    <label class="chip-label">
+                        <input type="radio" name="uploadMode" value="smart" checked>
+                        <span class="chip">🧠 Smart (Silence Trim)</span>
+                    </label>
+                    <label class="chip-label">
+                        <input type="radio" name="uploadMode" value="fast">
+                        <span class="chip">🚀 Fast (Direct Upload)</span>
+                    </label>
+                </div>
+            </div>
+            <div id="fastModeNote" class="small-text" style="display:none; color: #f57c00;">⚠️ Fast mode: silence trimming ഇല്ല, ഫയൽ നേരിട്ട് അയക്കും. ചെറിയ ഫയലുകൾക്ക് (< 18MB) ഏറ്റവും നല്ലത്. വലിയ ഫയലുകൾ API limit കാരണം reject ആകാം.</div>
+
             <button id="uploadBtn" class="btn-green">📤 Convert & Transcribe</button>
             <button id="resetKeyBtn" class="btn-outline">⚙️ Change API Key</button>
         </div>

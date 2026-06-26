@@ -19,7 +19,15 @@ const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 window.onload = () => { 
     checkApiKey(); 
-    updateCouncilorDataInBackground(); 
+    updateCouncilorDataInBackground();
+
+    // Fast mode note toggle
+    document.querySelectorAll('input[name="uploadMode"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const note = document.getElementById('fastModeNote');
+            if (note) note.style.display = radio.value === 'fast' ? 'block' : 'none';
+        });
+    });
 };
 
 function checkApiKey() {
@@ -403,7 +411,21 @@ uploadBtn.addEventListener('click', async () => {
     const FALLBACK_MODEL = "gemini-2.5-pro"; 
 
     function buildPromptText(extraTimeContext) {
-        let promptText = `Act as a professional Municipality Council Secretary for Nilambur Municipality (നിലമ്പൂർ മുൻസിപ്പാലിറ്റി), Kerala. Listen to this Malayalam council meeting recording. 
+        const outputMode = document.querySelector('input[name="outputMode"]:checked')?.value || 'minutes';
+        const isTranscribeOnly = outputMode === 'transcribe';
+
+        let promptText;
+
+        if (isTranscribeOnly) {
+            promptText = `You are a Malayalam transcription assistant. Listen to this audio recording of a Kerala municipality council meeting.
+
+[CONTEXT FOR SPEAKER IDENTIFICATION]: 
+The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson Shoukkathali Koomanchery, and Secretary Ferose Khan. The council consists of 33 ward members including Gireesh Moloormadathil, Aruma P T, Bushra Muneeb, Mumthas, Sameera K P, Velukutty N, Hamza P V, Musthafa K, Asrath, P M Basheer, Kunhimuhammed, Suresh P, Sreeja, Thongodan Sundaran, Sherly Mol, E S Mujeeb, Paloly Mehaboob, Geetha, Adukkath Ishak, Naicy, Gopinathan, Noorjahan P, Subaida Thattarasseri, Gopalakrishnan P, Unnikrishnan, Shareefa, Daisy Chacko, Mujeeb Devasseri, Sindhu, Sumeera P, Radha P, Binu.
+
+[TASK]:
+Transcribe ONLY what is spoken. Output raw Malayalam speech as text. Identify speakers where possible using format "സ്പീക്കർ നാമം:". Do NOT add summaries, headings, formatting, decisions list, or any editorial content. Just the spoken words.`;
+        } else {
+            promptText = `Act as a professional Municipality Council Secretary for Nilambur Municipality (നിലമ്പൂർ മുൻസിപ്പാലിറ്റി), Kerala. Listen to this Malayalam council meeting recording. 
 
 [CONTEXT FOR SPEAKER IDENTIFICATION]: 
 The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson Shoukkathali Koomanchery, and Secretary Ferose Khan. The council consists of 33 ward members including Gireesh Moloormadathil, Aruma P T, Bushra Muneeb, Mumthas, Sameera K P, Velukutty N, Hamza P V, Musthafa K, Asrath, P M Basheer, Kunhimuhammed, Suresh P, Sreeja, Thongodan Sundaran, Sherly Mol, E S Mujeeb, Paloly Mehaboob, Geetha, Adukkath Ishak, Naicy, Gopinathan, Noorjahan P, Subaida Thattarasseri, Gopalakrishnan P, Unnikrishnan, Shareefa, Daisy Chacko, Mujeeb Devasseri, Sindhu, Sumeera P, Radha P, Binu.
@@ -413,6 +435,7 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
 2. Fix all grammatical and speech errors to make it an official document.
 3. Identify different speakers accurately by matching their names from the current council list when someone is addressed. Use formats like "ചെയർപേഴ്സൺ പത്മിനി ഗോപിനാഥ്:" or "സെക്രട്ടറി ഫിറോസ് ഖാൻ:".
 4. Provide a clear, bulleted summary of the Key Decisions taken at the end.`;
+        }
 
         if (liveCouncilorData) {
             promptText += `\n\n[LIVE COUNCILOR DATA SCRAPED FROM WEBSITE]:\nHere is the latest raw text data from the municipality website containing the names of current elected representatives. Use this data to accurately identify and format the names of the speakers in the transcript:\n\n${liveCouncilorData}`;
@@ -522,6 +545,35 @@ The current leadership includes Chairperson Padmini Gopinath, Vice Chairperson S
     }
 
     try {
+        const uploadMode = document.querySelector('input[name="uploadMode"]:checked')?.value || 'smart';
+
+        // ===== FAST MODE: file directly to Gemini, no decode/trim/encode =====
+        if (uploadMode === 'fast') {
+            statusLabel.innerText = "⚡ ഫയൽ നേരിട്ട് അപ്‌ലോഡ് ചെയ്യുന്നു...";
+            statusLabel.style.color = "var(--warning-color)";
+
+            if (file.size > MAX_CHUNK_BYTES) {
+                statusLabel.innerText = `⚠️ ഫയൽ വലുപ്പം (${(file.size/1024/1024).toFixed(1)} MB) 18 MB കവിഞ്ഞു. Smart mode ഉപയോഗിക്കുക.`;
+                statusLabel.style.color = "var(--error-color)";
+                uploadBtn.disabled = false;
+                return;
+            }
+
+            const base64Audio = await blobToBase64(file);
+            const mimeType = file.type || 'audio/mpeg';
+            const promptText = buildPromptText(null);
+            const result = await transcribeChunk(base64Audio, mimeType, promptText);
+
+            if (result.error) { showApiError(result.error); uploadBtn.disabled = false; return; }
+            outputText.value = result.text;
+            statusLabel.classList.remove('pulse-text');
+            statusLabel.innerText = `റിപ്പോർട്ട് തയ്യാറാണ് ✨`;
+            statusLabel.style.color = "var(--primary-color)";
+            uploadBtn.disabled = false;
+            return;
+        }
+
+        // ===== SMART MODE: decode → silence trim → chunk → encode → upload =====
         statusLabel.innerText = "ഫയൽ വായിക്കുന്നു...";
         statusLabel.style.color = "var(--warning-color)";
 
